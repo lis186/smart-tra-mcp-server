@@ -1,0 +1,465 @@
+# Smart TRA MCP Server Implementation Plan
+
+*Following Core Development Principles: Incremental Progress, Critical Risk First, Fail Fast, Production-Like Testing*
+
+## Project Overview
+
+**Goal**: Build an intelligent Taiwan Railway Administration (TRA) query server following MCP design philosophy with 3 user-intent tools for natural language train queries.
+
+**Architecture**: Node.js + TypeScript MCP server with dual transport (STDIO + HTTP), TDX API integration, AI-powered parsing, and Google Cloud Run deployment.
+
+**Key Constraints**:
+
+- Maximum 3 tools following Shopify Storefront MCP philosophy
+- Unified `query` + `context` string parameters only
+- Commuter-first experience with monthly pass restrictions
+- Rate limiting: 5 requests/min per TDX API key
+
+**Core Principles Applied**:
+
+- **Deploy Fast First**: Each stage must be deployable independently
+- **Critical Risk First**: Address TDX auth and MCP handshake before complexity
+- **Fail Fast**: 3-attempt rule per problem, then reassess approach
+- **Small Batch Development**: Single feature per commit
+- **Pragmatism Over Perfection**: Working simple solution beats complex perfect one
+
+---
+
+## Stage 1: Minimal Foundation (Critical Risk First)
+
+**Goal**: Prove MCP SDK works in our environment
+**Success Criteria**: Can import MCP SDK and create empty server
+**Tests**: TypeScript compiles, basic MCP server instantiates
+**Status**: Not Started
+
+**Critical Risk**: MCP SDK compatibility - validate immediately before anything else
+
+### Tasks (Single Responsibility Each)
+
+1. **Minimal npm setup** (Deploy Fast First)
+
+   ```bash
+   npm init -y
+   npm install @modelcontextprotocol/sdk@^1.17.1
+   # STOP: Test this works before adding anything else
+   ```
+
+2. **MCP SDK validation** (Critical Risk First)
+   - Create `test-mcp.ts` with basic MCP server import
+   - Verify compilation succeeds
+   - Test server instantiation doesn't crash
+   - **3-Attempt Rule**: If this fails after 3 tries, reassess MCP approach
+
+3. **TypeScript setup** (Small Batch)
+
+   ```bash
+   npm install -D typescript@^5.0.0 tsx@^4.0.0 @types/node@^20.0.0
+   ```
+
+   - Copy `tsconfig.json` from reference implementation
+   - Test compilation pipeline works
+
+4. **Basic structure** (Minimal)
+
+   ```text
+   src/
+   └── server.ts  # Single file initially
+   ```
+
+### Validation Method (Production-Like Testing)
+
+- `npm run build` succeeds without errors
+- Can `import { Server } from '@modelcontextprotocol/sdk/server.js'`
+- Basic server instantiation works: `new Server(...)`
+
+**Stop Condition**: If MCP SDK doesn't work after 3 different approaches, document findings and consider alternative architectures
+
+---
+
+## Stage 2: STDIO Transport Only (Minimize Assumptions)
+
+**Goal**: Get Claude Desktop connection working
+**Success Criteria**: Claude Desktop can connect and see server
+**Tests**: Actual handshake with Claude Desktop succeeds
+**Status**: Not Started
+
+**Critical Risk**: STDIO protocol handshake - test with real Claude Desktop immediately
+
+### Tasks (Learn from Existing Code)
+
+1. **Study reference STDIO implementation** (Learning from Existing Code)
+   - Examine `reference/smart-weather-mcp-server/src/unified-server.ts`
+   - Document exact STDIO setup pattern
+   - Understand transport initialization
+
+2. **Minimal STDIO server** (Deploy Fast First)
+   - Single file `src/server.ts`
+   - MCP server with zero tools initially
+   - Basic error logging to stderr only
+   - Test: Starts without crashing
+
+3. **Claude Desktop integration test** (Critical Risk First)
+   - Add to Claude Desktop config
+   - Test handshake and protocol negotiation
+   - Document exact setup steps that work
+   - **Stop if this fails**: Investigate before proceeding
+
+4. **Add empty tool for testing** (Small Batch)
+   - Single test tool: `ping` that returns "pong"
+   - Verify tool appears in Claude Desktop
+   - Test tool execution works
+
+### Validation Method (Continuous Validation)
+
+- Server starts and responds to STDIO
+- Claude Desktop discovers server successfully
+- Can see and execute test tool
+- No crashes during connection lifecycle
+
+**Critical Milestone**: Must have working Claude Desktop connection before Stage 3
+
+---
+
+## Stage 3: TDX Authentication (Critical Risk First)
+
+**Goal**: Prove we can authenticate with TDX APIs
+**Success Criteria**: Can retrieve valid access token
+**Tests**: Token API call returns 200 with real token
+**Status**: Not Started
+
+**Critical Risk**: TDX API access - biggest unknown, validate immediately
+
+### Tasks (Minimize Assumptions)
+
+1. **TDX credential acquisition** (Problems Before Solutions)
+   - Register for TDX developer account
+   - Generate API credentials
+   - Document exact registration process
+   - Test credentials with curl first
+
+2. **Minimal OAuth client** (Deploy Fast First)
+   - Single function: `getTDXToken(clientId, secret)`
+   - No caching, no retry, no complexity
+   - Test with hardcoded credentials initially
+   - Log full request/response for debugging
+
+3. **Real API token test** (Production-Like Testing)
+   - Call actual TDX token endpoint
+   - Verify response structure
+   - Log token for manual inspection
+   - **3-Attempt Rule**: If auth fails, try different approaches
+
+4. **Basic API call validation** (Small Batch)
+   - Use token to call `/v2/Rail/TRA/Station`
+   - Log raw response data
+   - Verify API returns expected data structure
+   - No parsing yet - just prove connectivity
+
+### Validation Method (Clear Validation Methods)
+
+- Successfully retrieve access token from TDX production
+- Token works for at least one API endpoint call
+- Response structure matches TDX documentation
+- Error scenarios handled (401, network failures)
+
+**Stop Condition**: If can't get working TDX token after 3 different credential approaches, reassess data source strategy
+
+---
+
+## Stage 4: First Tool - search_station (Implementation Consistency)
+
+**Goal**: One working MCP tool that finds stations
+**Success Criteria**: Can find "台北" and return station info
+**Tests**: Exact matches work, basic fuzzy matching
+**Status**: Not Started
+
+**Focus**: Get one tool fully working before adding complexity
+
+### Tasks (Single Responsibility)
+
+1. **Station data loading** (Deploy Fast First)
+   - Call TDX station API once
+   - Store response in memory
+   - Build simple lookup by exact name
+   - Test: Can find "臺北車站" by exact match
+
+2. **Basic fuzzy matching** (80/20 Rule)
+   - Handle common abbreviations: "北車" → "臺北"
+   - Simple partial matching
+   - Confidence scoring (0.0-1.0)
+   - Handle 80% of common cases well
+
+3. **MCP tool implementation** (Learn from Reference)
+   - Study reference tool patterns
+   - Implement `search_station` with correct schema
+   - Input validation for `query` + `context` strings
+   - Response formatting consistent with MCP patterns
+
+4. **Response structure design** (Clear Intent)
+
+   ```json
+   {
+     "main": {
+       "stationId": "1000",
+       "name": "臺北",
+       "confidence": 0.95
+     },
+     "alternatives": [...],
+     "needsConfirmation": false
+   }
+   ```
+
+### Validation Method (Test Behavior)
+
+- "台北" returns exact match with confidence 1.0
+- "北車" returns 臺北 with high confidence
+- Invalid input returns helpful error
+- Tool works reliably in Claude Desktop
+
+**Key Decision Point**: If basic search works well, continue to Stage 5. If fuzzy matching is problematic, consider simpler exact-match-only approach
+
+---
+
+## Stage 5: Rule-Based Query Parsing (Hybrid Solutions)
+
+**Goal**: Extract origin/destination from simple queries
+**Success Criteria**: "台北到台中" → {origin: "台北", destination: "台中"}
+**Tests**: Common query patterns parsed correctly
+**Status**: Not Started
+
+**Hybrid Approach**: Rules for 80% of cases, consider AI only if needed
+
+### Tasks (Pragmatism Over Perfection)
+
+1. **Common pattern analysis** (Learning from Usage)
+   - Study 20-30 example queries
+   - Identify most frequent patterns
+   - Document exact regex patterns needed
+   - Focus on high-frequency cases first
+
+2. **Basic regex parsing** (Simple Solutions First)
+   - Extract "A到B" patterns with Chinese characters
+   - Time patterns: "明天", "8點", "早上"
+   - Date patterns: "下週五", "今晚"
+   - Test with real user query examples
+
+3. **Confidence-based routing** (Dynamic Configuration)
+   - Score 0.0-1.0 based on pattern matches
+   - Threshold for "good enough" (e.g., 0.7)
+   - Clear fallback for low-confidence cases
+   - Log confidence scores for tuning
+
+4. **Integration with search_station** (Tool Collaboration)
+   - Use station search to validate extracted locations
+   - Handle cases where origin/destination not found
+   - Suggest corrections for near-misses
+   - Provide helpful error messages
+
+### Validation Method (Real Usage Patterns)
+
+- "台北到台中明天早上" correctly parsed
+- "下週五晚上回家" handles partial information
+- Low confidence cases identified correctly
+- Integration with station lookup works smoothly
+
+**Decision Point**: If rule-based parsing covers >80% of cases well, skip AI complexity. If <60% accuracy, consider simple NLP alternatives
+
+---
+
+## Stage 6: search_trains Tool (Critical Path)
+
+**Goal**: Second MCP tool for train schedules
+**Success Criteria**: Can search basic train timetables
+**Tests**: "台北到台中" returns train list
+**Status**: Not Started
+
+### Tasks (Build on Working Foundation)
+
+1. **TDX timetable API integration** (Production-Like Testing)
+   - Call `/v2/Rail/TRA/DailyTrainTimetable`
+   - Handle API response structure
+   - Test with various origin/destination pairs
+   - Document API limitations and quirks
+
+2. **Basic train search logic** (Single Responsibility)
+   - Filter trains by origin/destination stations
+   - Basic time window filtering (next 2 hours)
+   - Sort by departure time
+   - Return structured train list
+
+3. **Commuter defaults** (User Perspective)
+   - Default to next 120 minutes
+   - Filter to monthly pass trains (區間車, 區間快車)
+   - Show "will be late" indicators
+   - Include backup train options
+
+4. **MCP tool registration** (Implementation Consistency)
+   - Follow same patterns as search_station
+   - Unified `query` + `context` parameters
+   - Consistent error handling
+   - Response format matches design
+
+### Validation Method (End-to-End Testing)
+
+- "台北到台中" returns actual train schedules
+- Monthly pass filtering works correctly
+- Response times acceptable (<2s)
+- Works reliably in Claude Desktop
+
+**MVP Decision Point**: If search_station + search_trains both work, have viable MVP. Consider deployment before adding third tool
+
+---
+
+## Stage 7: Basic Deployment (Reversible Design)
+
+**Goal**: Get working tools deployed and accessible
+**Success Criteria**: Deployed server responds to health checks
+**Tests**: Container runs, basic functionality works
+**Status**: Not Started
+
+### Tasks (Minimize Dependencies)
+
+1. **Simple Docker container** (Deploy Fast First)
+   - Basic Node.js container
+   - Copy source and dependencies
+   - Expose health check endpoint
+   - Test locally with Docker first
+
+2. **Environment configuration** (Observability First)
+   - Environment variable support
+   - Basic logging to stdout
+   - Health check endpoint
+   - Configuration validation at startup
+
+3. **Deployment automation** (Reversible Decisions)
+   - Simple deployment script
+   - Can deploy to any Docker platform
+   - Not locked to specific cloud provider
+   - Document deployment process
+
+4. **Basic monitoring** (Real-Time Documentation)
+   - Health endpoint with status details
+   - Basic metrics logging
+   - Error rate tracking
+   - Response time logging
+
+### Validation Method (Continuous Validation)
+
+- Container builds and runs locally
+- Health check responds correctly
+- Deployed version handles real requests
+- Performance acceptable under basic load
+
+---
+
+## Stage 8: plan_trip Tool (Complete MVP)
+
+**Goal**: Third tool for trip planning
+**Success Criteria**: Basic route suggestions
+**Tests**: Multi-segment journey planning
+**Status**: Not Started
+
+### Tasks (Learn from Previous Stages)
+
+1. **Route calculation logic** (Implementation Consistency)
+   - Use existing search_trains functionality
+   - Basic transfer detection
+   - Multiple option generation
+   - Simple ranking by time/convenience
+
+2. **Transfer handling** (Hybrid Solutions)
+   - Fixed buffer times (15min main, 30min branch)
+   - Major transfer stations identified
+   - Risk assessment for connections
+   - Clear transfer instructions
+
+3. **Response formatting** (User Perspective)
+   - Multiple route options
+   - Clear time/cost breakdown
+   - Risk indicators and alternatives
+   - Actionable next steps
+
+### Validation Method
+
+- Can plan basic multi-segment trips
+- Transfer suggestions realistic
+- Response format helpful to users
+- Performance acceptable
+
+---
+
+## Success Metrics (Quantifiable)
+
+### Functional Requirements (Clear Success Criteria)
+
+- [ ] All 3 tools operational with unified parameters
+- [ ] Average response time ≤1.5s
+- [ ] Error rate <5%
+- [ ] Claude Desktop integration stable
+
+### Quality Gates (Every Stage)
+
+- [ ] TypeScript compiles with zero errors
+- [ ] All tools follow MCP design patterns
+- [ ] Real TDX API integration working
+- [ ] Production deployment successful
+
+### User Experience (Real Usage)
+
+- [ ] Station search >90% accuracy for common names
+- [ ] Train search returns relevant results
+- [ ] Monthly pass restrictions clear
+- [ ] Error messages helpful and actionable
+
+## Risk Management (Fail Fast Principle)
+
+### Technical Risks (Address Early)
+
+1. **MCP SDK Compatibility**: Test Stage 1 immediately
+2. **TDX API Access**: Validate Stage 3 before proceeding
+3. **Claude Desktop Integration**: Real testing in Stage 2
+4. **Performance**: Monitor from Stage 4 onwards
+
+### Development Risks (3-Attempt Rule)
+
+1. **Blocked on any stage**: Stop after 3 attempts, reassess
+2. **Integration failures**: Simplify approach, remove complexity
+3. **Performance issues**: Profile and optimize specific bottlenecks
+4. **User experience problems**: Test with real users early
+
+## Implementation Guidelines (Core Principles)
+
+### Development Approach
+
+- **Incremental Progress Over Big Bangs**: Single feature per commit
+- **Critical Risk First**: Address unknowns before building on assumptions
+- **Fail Fast Principle**: 3 attempts max, then change approach
+- **Production-Like Testing**: Real TDX APIs and Claude Desktop from start
+- **Continuous Learning**: Document what works/fails after each stage
+
+### Quality Standards (Learning from Existing Code)
+
+- Study reference implementations before starting each stage
+- Use same patterns for similar problems
+- Every commit must compile and not break existing functionality
+- Update this plan immediately when approach changes
+- Test behavior, not just implementation
+
+### When Stuck (After 3 Attempts)
+
+1. **Document what failed** and specific error messages
+2. **Research alternatives** - find 2-3 different approaches
+3. **Question fundamentals** - is this the right abstraction level?
+4. **Try different angle** - simpler approach or different technology
+
+---
+
+**Estimated Duration**: 4-6 weeks (incremental approach reduces risk and time)
+**Critical Path**: Stages 1-4 (foundation through first working tool)
+**MVP Target**: Stages 1-6 (two working tools deployed)
+**First Demo**: Stage 4 completion (station search working in Claude Desktop)
+**Production Ready**: Stage 7 completion (deployed and monitored)
+
+**Key Success Factor**: Deploy working simple version early, iterate based on real usage feedback
+
+Remember: Update this plan as you learn from each stage. The best plans adapt to reality!
