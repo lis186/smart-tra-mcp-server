@@ -1,0 +1,285 @@
+---
+description: Universal development methodology and principles for rapid, effective software delivery with continuous learning and improvement
+globs:
+alwaysApply: true
+---
+
+# Universal Development Principles
+
+## Core Philosophy
+
+These principles ensure rapid, efficient delivery of valuable software while learning and continuously improving from each experience. They are designed to be adapted to any software project, regardless of technology stack or domain.
+
+## 🚀 Speed & Delivery
+
+### 1. **Deploy Fast First**
+
+- Remove time constraints, don't set week limits
+- Deploy simple features first, iterate quickly
+- Add features incrementally instead of waiting for complete versions
+
+### 2. **Small Batch Development**
+
+- Each step must be small and verifiable
+- Deploy after adding just one small feature
+- Avoid large integrations to reduce risk
+
+### 3. **Incremental Value Delivery**
+
+- Priority: features that immediately demonstrate value
+- Start with MVP, enhance gradually
+- Each phase must operate independently
+
+### 4. **Pragmatism Over Perfection**
+
+- "Working" is more important than "perfect"
+- 80/20 rule - achieve 80% effect with 20% effort
+- Avoid over-engineering
+
+## ⚠️ Risk Management
+
+### 5. **Critical Risk First**
+
+- Validate most critical parts earliest
+- Technical feasibility must be confirmed first
+- Test uncertain integration points early
+
+### 6. **Fail Fast Principle**
+
+- Discover non-viable approaches quickly
+- Set time boxes - switch approaches when exceeded
+- Don't waste time on dead ends
+- Failure is learning opportunity, not setback
+
+### 7. **Minimize Assumptions**
+
+- Don't assume any technology will definitely work
+- Don't assume integrations will be smooth
+- Validate every assumption
+
+### 8. **Reversible Design**
+
+- Every decision must be rollback-able
+- Keep old deployment versions
+- Data structure changes need migration plans
+
+## 🔍 Validation & Learning
+
+### 9. **Continuous Validation**
+
+- Every version must run in the actual target production environment
+- Test in real environment, not just locally
+- Find and solve problems early
+
+### 10. **Clear Validation Methods**
+
+- Each step needs clear testing approach
+- Success criteria must be quantifiable
+- Have backup plans for failures
+
+### 11. **Continuous Learning & Adjustment**
+
+- Record "what was learned" after each step
+- Difficult experiences are more valuable - document them specially
+- Adjust subsequent approaches based on learning
+- Maintain a lessons learned document with continuous updates
+
+### 12. **Problems Before Solutions**
+
+- First confirm "why are we doing this"
+- Understanding problems is more important than rushing to code
+- If problem definition changes, solutions must change too
+
+## 📝 Documentation & Communication
+
+### 13. **Clear Challenges & Questions**
+
+- List expected challenges for each phase upfront
+- Specially note issues that block progress if unclear
+- Prepare backup plans
+
+### 14. **Real-time Documentation**
+
+- Record pitfalls immediately in a troubleshooting document
+- Save working configurations in a reference document
+- Leave breadcrumbs for future self and team
+
+### 15. **Transparent Communication**
+
+- Speak up when stuck
+- Ask questions when uncertain
+- Progress updates must be honest
+
+### 16. **User Perspective**
+
+- Regularly think from the end user's perspective
+- System responses should be friendly and clear
+- Error messages must be helpful
+
+## 🔧 Technical Management
+
+### 17. **Keep Plans Flexible**
+
+- Plans are guidance, not dogma
+- Adjust priorities based on actual situations
+- Be brave to change when finding better paths
+
+### 18. **Technical Debt Awareness**
+
+- Record every "temporary solution" and technical debt
+- Clearly mark `TODO` and `FIXME`
+- Regular review whether technical debt needs paying
+
+### 19. **Observability First**
+
+- Add logging from day one
+- Errors need clear error messages
+- Debugging convenience more important than perfection
+
+### 20. **Minimize Dependencies**
+
+- Don't add packages if not needed
+- Use standard library instead of third-party when possible
+- Every dependency is potential risk
+
+### 21. **Complexity Budget**
+
+- Every feature adds complexity
+- Regular evaluation of worthiness
+- Simple systems are easier to maintain
+
+### 22. **Implementation Consistency**
+
+- Use same approaches for same problems
+- Establish and maintain code conventions and patterns
+- Must confirm with team before changing existing conventions
+- Record design decisions in a central document
+- New developers should learn correct approaches from existing code
+
+### 23. **Hybrid Solutions Over Pure Solutions**
+
+- Pure approaches (single-method solutions) often have limitations in production
+- Combine fast local processing with intelligent remote fallbacks for optimal user experience
+- 80/20 principle: optimize for common cases, handle edge cases intelligently
+- Example: Local processing for simple tasks + remote service for complex scenarios
+
+### 24. **Dynamic Configuration Over Static Rules**
+
+- Context-aware decision making more robust than fixed thresholds
+- Systems should adapt behavior based on runtime conditions and available resources
+- Example: Adjust processing thresholds based on available services and system load
+- Avoid hardcoded values that can't adapt to changing conditions
+
+### 25. **Production-Like Testing Supremacy**
+
+- Integration tests with real usage patterns more valuable than comprehensive unit tests
+- Unit tests can pass while real-world usage reveals critical gaps
+- Test with actual user input and scenarios, not just engineered test cases
+- Real environment testing reveals issues local testing misses
+
+### 26. **Graceful Degradation Architecture**
+
+- Design systems to work when external dependencies fail (services, APIs, databases)
+- Fallback mechanisms should be architectural decisions, not afterthoughts
+- Users should always receive a response, even if not optimal
+- Lower service levels acceptable vs complete failure
+
+### 27. **User Feedback Drives Architecture**
+
+- Real usage patterns reveal optimization opportunities missed in planning
+- Actual user behavior exposes gaps not caught in testing
+- Architecture decisions should be validated with real user scenarios
+- Monitor production usage to discover performance bottlenecks
+
+## 💰 Resource & Cost Management
+
+### 28. **Cost Awareness**
+
+- Record costs for each service (cloud hosting, API calls, infrastructure)
+- Prioritize free tier usage where available
+- Optimize costs before scaling
+
+### 29. **Resource Awareness**
+
+- Consider development time costs
+- Balance "build ourselves" vs "use existing"
+- Time is also a resource
+
+## 🔒 Security & Quality
+
+### 30. **Security Fundamentals**
+
+- Keep secrets out of version control from day one
+- Input validation from the beginning
+- Don't wait until the end to add security
+
+## 🎉 Motivation & Mindset
+
+### 31. **Celebrate Small Wins**
+
+- Every successful deployment is worth recording
+- Build confidence and momentum
+- Share progress (even if small)
+
+## How to Use These Principles
+
+1. **Pre-planning Checklist**: Review these principles before each phase
+2. **Review Reference**: When facing difficulties, check if any principle was violated
+3. **Learning Updates**: Add new important principles discovered from experience
+4. **Team Consensus**: Ensure all participants understand and agree with these principles
+5. **Real-World Application**: Principles 23-27 are battle-tested from actual production systems - apply especially when building hybrid architectures
+
+## Priority Order
+
+When principles conflict, reference this order:
+
+1. **Speed & Delivery** - Rapidly validate ideas
+2. **Risk Management** - Avoid big disasters
+3. **Validation & Learning** - Ensure doing the right thing
+4. **Other Principles** - Optimize based on the above three
+
+## Implementation Guidelines
+
+- **Every change should be deployable**: Don't accumulate changes
+- **Test in target environment**: Production environment, not just local
+- **Document lessons learned**: Especially from failures and unexpected challenges
+- **Keep complexity under control**: Simple solutions that work beat complex perfect ones
+- **Validate assumptions early**: Don't build on unverified assumptions
+- **Reversible decisions**: Design for rollback and iteration
+
+## Project-Specific Configuration
+
+When applying these principles to your project, define:
+
+1. **Target Environment**: Your specific production environment (e.g., AWS, Google Cloud, on-premise)
+2. **User Context**: Your end users and their usage patterns
+3. **Technology Stack**: Your specific tools, frameworks, and services
+4. **Documentation Standards**: Your team's documentation files and formats
+5. **Testing Environments**: Your specific testing and staging environments
+
+Example configuration for a project:
+
+```yaml
+project:
+  environment: "AWS Lambda + API Gateway"
+  users: "Mobile app developers"
+  stack: "Node.js, PostgreSQL, Redis"
+  docs:
+    decisions: "docs/architecture/decisions.md"
+    lessons: "docs/lessons-learned.md"
+    troubleshooting: "docs/troubleshooting.md"
+  testing:
+    integration: "Staging environment"
+    production-like: "Pre-production with real data subset"
+```
+
+## Continuous Evolution
+
+These principles are living guidelines that should evolve with your experience:
+
+1. **Add New Principles**: When you discover patterns worth codifying
+2. **Refine Existing Ones**: Based on what works in practice
+3. **Remove Outdated Ones**: When context changes significantly
+4. **Share Learnings**: Contribute back to the community
+
+Remember: The best principles are those discovered through real experience, not prescribed from theory.

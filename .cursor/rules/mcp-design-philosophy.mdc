@@ -1,0 +1,188 @@
+---
+description: When designing or reviewing MCP (Model Context Protocol) servers, strictly follow the Shopify Storefront MCP design philosophy:
+globs:
+alwaysApply: false
+---
+# Storefront MCP Design Philosophy Rules
+
+## Core Design Principles
+
+When designing or reviewing MCP (Model Context Protocol) servers, strictly follow the Shopify Storefront MCP design philosophy:
+
+### 1. User-Centric Tool Design
+
+- **Tool names MUST reflect user intent, NOT technical implementation**
+  ✅ Good: `search_weather`, `find_location`, `get_advice`
+  ❌ Bad: `get_current_weather`, `call_weather_api`, `fetch_data`
+
+- **Each tool should answer "What does the user want to do?"**
+  - Not "What API endpoint does this call?"
+  - Not "What technical function does this perform?"
+
+### 2. Minimal Tool Count
+
+- **Maximum 3-4 tools per MCP server**
+- **Each tool must have clear business value**
+- **Avoid technical function splitting**
+  ❌ Bad: 5+ tools for different API endpoints
+  ✅ Good: 3 tools covering complete user journey
+
+### 3. Unified Parameter Structure
+
+- **ALL tools MUST use the same parameter pattern:**
+
+  ```json
+  {
+    "query": "natural language user request",
+    "context": "optional preferences and context"
+  }
+  ```
+
+- **No exceptions** - consistency is critical
+- **No structured parameters** like `location`, `units`, `language` separately
+
+### 4. Semantic Tool Naming
+
+- **Use action verbs that users understand:**
+  - `search_*` - for finding/discovering
+  - `get_*` - for retrieving specific information  
+  - `find_*` - for locating/identifying
+  - `update_*` - for modifying state
+
+### 5. Business Value Orientation
+
+- **Every tool must solve a real user problem**
+- **Tools should enable user actions, not just provide data**
+- **Include actionable recommendations in responses**
+- **Think: "What should the user do next?"**
+
+### 6. Tool Collaboration Design
+
+- **Tools must work together in logical user journeys**
+- **Design clear workflow patterns:**
+
+  ```
+  User Need → Tool 1 (Discovery) → Tool 2 (Action) → Tool 3 (Confirmation)
+  ```
+
+- **Avoid isolated, disconnected tools**
+
+### 7. Context-Aware Responses
+
+- **Responses should include next-step guidance**
+- **Remember conversation context when possible**
+- **Provide actionable insights, not just raw data**
+- **Format responses for human consumption**
+
+## Implementation Guidelines
+
+### Tool Definition Template
+
+```json
+{
+  "name": "action_subject",
+  "description": "Help users [specific user goal] by [clear value proposition]",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "Natural language description of what user wants"
+      },
+      "context": {
+        "type": "string",
+        "description": "Additional preferences or context (optional)"
+      }
+    },
+    "required": ["query"]
+  }
+}
+```
+
+### Response Format Guidelines
+
+- **Include actionable recommendations**
+- **Use markdown for better readability**
+- **Provide relevant links when helpful**
+- **Structure information hierarchically**
+- **End with suggested next steps**
+
+### Anti-Patterns to Avoid
+
+❌ **Technical Function Splitting**
+
+- Don't create separate tools for each API endpoint
+- Don't split by data types (current/forecast/historical)
+
+❌ **Parameter Structure Inconsistency**  
+
+- Don't mix `query+context` with structured parameters
+- Don't use different parameter names across tools
+
+❌ **Implementation-Focused Naming**
+
+- Don't name tools after technical functions
+- Don't expose internal architecture in tool names
+
+❌ **Data-Only Responses**
+
+- Don't just return raw API data
+- Don't forget to provide user guidance
+
+## Code Review Checklist
+
+When reviewing MCP server code, verify:
+
+- [ ] All tools use identical `query` + `context` parameter structure
+- [ ] Tool names reflect user intent, not technical implementation
+- [ ] Maximum 3-4 tools total
+- [ ] Each tool has clear business value
+- [ ] Tools work together in logical user journeys
+- [ ] Responses include actionable recommendations
+- [ ] No technical jargon in user-facing descriptions
+- [ ] Consistent error handling across all tools
+- [ ] Natural language query support in all tools
+
+## Examples
+
+### ✅ Good Storefront MCP Design
+
+```typescript
+// Shopify Storefront MCP
+tools: [
+  "search_shop_catalog",      // Find products
+  "search_shop_policies_and_faqs", // Get store info
+  "get_cart",                 // View cart
+  "update_cart"               // Manage cart
+]
+```
+
+### ✅ Good Weather MCP Design  
+
+```typescript
+// Following Storefront philosophy
+tools: [
+  "search_weather",           // Find weather info
+  "find_location",            // Resolve location
+  "get_weather_advice"        // Get recommendations
+]
+```
+
+### ❌ Bad Technical Design
+
+```typescript
+// Violates Storefront philosophy
+tools: [
+  "get_current_conditions",   // Technical API mapping
+  "get_daily_forecast",       // Technical API mapping  
+  "get_hourly_forecast",      // Technical API mapping
+  "get_historical_data",      // Technical API mapping
+  "geocode_location"          // Technical API mapping
+]
+```
+
+## Philosophy Summary
+
+> "Design for users, not APIs. Create tools that solve problems, not just access data. Make every interaction feel like talking to a helpful human assistant."
+
+The Storefront MCP philosophy prioritizes user experience over technical convenience. Every design decision should ask: "Does this make the user's life easier?"

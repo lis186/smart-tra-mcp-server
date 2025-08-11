@@ -1,0 +1,369 @@
+---
+description: Project-specific development principles for Smart Weather MCP Server - lessons learned from Phase 2.1 hybrid parsing and Phase 4.2 complete implementation
+globs:
+  - "src/**"
+  - "tests/**"
+  - "*.md"
+alwaysApply: true
+---
+
+# Smart Weather MCP Server Development Principles
+
+## Project Context
+
+These principles are specific to the Smart Weather MCP Server project and capture hard-won lessons from implementing a hybrid rule-based + AI fallback parsing architecture for multilingual weather queries.
+
+**Project Stack**:
+
+- TypeScript + Node.js
+- MCP SDK for Claude Desktop integration
+- Google Gemini AI for natural language parsing
+- Express.js for HTTP/SSE transport
+- Google Cloud Run deployment
+- Jest for testing
+
+## 🤖 AI Integration Principles
+
+### 1. **Hybrid Parsing Architecture**
+
+- Pure AI parsing is too slow for simple queries (~500ms)
+- Pure rule-based parsing fails on complex Chinese queries
+- Solution: Rule-based fast path (~1ms) + AI fallback for complex cases
+- Confidence threshold: 0.5 with AI available, 0.3 without
+
+### 2. **Chinese Language Special Handling**
+
+- Word boundaries (`\b`) don't work with Chinese characters
+- Use character-based patterns: `/[\u4e00-\u9fa5]/`
+- Compound location-time patterns need special parsing (e.g., "台灣明天空氣品質")
+- **Language Detection Fix**: Distinguish zh-TW vs zh-CN using character heuristics
+- **API Language Mapping**: Pass detected language to Google Weather API for correct responses
+- Test with real Chinese queries from Claude Desktop users
+
+### 3. **Dynamic Confidence Thresholds**
+
+```typescript
+const aiThreshold = this.geminiParser ? 0.50 : 0.30;
+if (ruleResult.confidence < aiThreshold && this.geminiParser) {
+  // Use AI fallback
+}
+```
+
+### 4. **Parsing Source Tracking**
+
+Always track parsing source for debugging:
+
+- `'rules_only'` - High confidence rule-based parsing
+- `'rules_with_ai_fallback'` - Low confidence rules + AI enhancement
+- `'rules_fallback'` - Rules only when AI unavailable
+
+## 🏗️ MCP Server Architecture
+
+### 5. **Dual Transport Mode Design**
+
+- STDIO mode for Claude Desktop: `--mode=stdio`
+- HTTP/SSE mode for n8n/web: `--mode=http --port=8080`
+- Single unified server entry point with mode switching
+- Shared ToolHandlerService to prevent code duplication
+
+### 6. **3-Tool User Intent Design**
+
+Following Shopify Storefront MCP philosophy:
+
+- `search_weather` - Not "get_weather_data"
+- `find_location` - Not "geocode_address"
+- `get_weather_advice` - Not "analyze_weather_conditions"
+
+### 7. **Unified Parameters**
+
+All tools MUST use `query` + `context` string parameters:
+
+```typescript
+interface WeatherQuery {
+  query: string;
+  context?: string; // NOT an object, always a string
+}
+```
+
+### 8. **Dual-Format Output Design**
+
+MCP tools should return both machine-readable and human-readable content:
+
+```typescript
+const content = [
+  { type: 'text', text: JSON.stringify(data, null, 2) }, // Machine-readable
+  { type: 'text', text: this.formatHumanReadable(data) }  // Human-readable
+];
+```
+
+## 🧪 Testing Strategy
+
+### 9. **Real Query Test Cases**
+
+Test with actual failing queries discovered in production:
+
+- "沖繩明天天氣預報 衝浪條件 海浪高度 風速"
+- "日本沖繩明天天氣 海況 風浪預報"
+- "台灣明天空氣品質預報 花粉濃度 過敏指數"
+
+### 10. **Integration Over Unit Tests**
+
+- Unit tests passed but real Claude Desktop usage failed
+- Create `query-router-hybrid.test.ts` for hybrid parsing tests
+- Test with mock Gemini parser to simulate AI availability scenarios
+
+### 11. **Test Organization**
+
+- Remove outdated test files immediately
+- One comprehensive test file per major feature
+- Use descriptive test names that explain the scenario
+- **Structured Test Directories**: tests/{unit,integration,e2e}/{core,services,tools}
+- **Test Documentation**: Create README.md to explain test structure and purpose
+
+## 🏗️ Service Architecture Principles
+
+### 12. **Singleton Service Injection**
+
+Avoid duplicate service initialization with singleton pattern:
+
+```typescript
+private static async getLocationService(): Promise<LocationService> {
+  if (!this.locationService) {
+    const apiKey = await SecretManager.getSecret('googleMapsApiKey');
+    this.locationService = new LocationService({ apiKey });
+  }
+  return this.locationService;
+}
+```
+
+### 13. **Hybrid AI Architecture**
+
+For AI-powered services, always provide rule-based fallback:
+
+```typescript
+class GeminiWeatherAdvisor {
+  async generateAdvice(query: WeatherQuery): Promise<WeatherAdvice> {
+    if (this.geminiClient) {
+      try {
+        return await this.generateAIAdvice(query);
+      } catch (error) {
+        logger.warn('AI advice failed, using rule-based fallback', { error });
+      }
+    }
+    return this.generateRuleBasedAdvice(query);
+  }
+}
+```
+
+## 📊 Performance Targets
+
+### 14. **Response Time Budgets**
+
+- Simple rule-based queries: < 10ms
+- Complex queries with AI: < 800ms
+- Cold start time: < 800ms for Cloud Run
+- Average end-to-end: < 1.5 seconds
+
+### 15. **Parsing Performance Metrics**
+
+```typescript
+// Log parsing performance
+logger.info('Query parsed', {
+  duration: Date.now() - startTime,
+  source: result.parsingSource,
+  confidence: result.confidence
+});
+```
+
+## 🔒 Production Readiness
+
+### 16. **Graceful AI Degradation**
+
+- System MUST work without Gemini connection
+- Show clear status: "⚠️ Gemini AI not available - using simplified parsing"
+- Lower confidence thresholds when AI unavailable
+- Never fail completely - always return a response
+
+### 17. **Structured Logging**
+
+```typescript
+logger.info('sseConnectionEstablished', {
+  connectionId,
+  activeConnections: this.sseConnections.size,
+  transport: 'SSE'
+});
+```
+
+### 18. **Connection Pool Management**
+
+- SSE connections need cleanup (30-minute threshold)
+- Maximum 100 concurrent connections
+- Log connection lifecycle events
+- Regular cleanup task every 5 minutes
+
+## 📝 Documentation Standards
+
+### 19. **Phase Tracking in CLAUDE.md**
+
+Keep current status prominently displayed:
+
+```markdown
+🎯 **Current Status**: **Phase 2.1 Parsing Optimization COMPLETED** ✅
+```
+
+### 20. **Learning Log Updates**
+
+Document specific technical discoveries in LEARNING_LOG.md:
+
+- Problem encountered
+- Solution implemented
+- Performance impact
+- Code examples
+
+### 21. **Test Case Documentation**
+
+Document why specific test cases exist:
+
+```typescript
+test('Complex Okinawa surfing query with AI fallback', async () => {
+  // This query failed in production with pure rule-based parsing
+  const query = '沖繩明天天氣預報 衝浪條件 海浪高度 風速';
+```
+
+## 🚀 Deployment & DevOps
+
+### 22. **Cloud Run Configuration**
+
+```dockerfile
+ENV PORT=8080
+ENV HOST=0.0.0.0
+CMD ["node", "dist/unified-server.js", "--mode=http"]
+```
+
+### 23. **Secret Management**
+
+- Development: `.env` files with defaults
+- Production: Google Cloud Secret Manager
+- Never log API keys or sensitive data
+
+### 24. **Health Check Endpoints**
+
+```typescript
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'healthy',
+    mode: 'http',
+    connections: this.sseConnections.size
+  });
+});
+```
+
+## 🔄 Phase-Specific Learnings
+
+### Phase 1: Infrastructure
+
+- Dual transport architecture essential for flexibility
+- Structured logging from day one pays dividends
+- TypeScript strict mode catches many issues early
+
+### Phase 2: AI Integration
+
+- Start with simple implementation, discover limitations through usage
+- Mock external services in tests for reliability
+- Track parsing sources for debugging
+
+### Phase 2.1: Parsing Optimization
+
+- Real user queries expose gaps unit tests miss
+- Hybrid architectures provide best of both worlds
+- Dynamic thresholds handle varying conditions gracefully
+
+### Phase 4.2: Complete Feature Implementation
+
+- **Dual-format output**: JSON + Markdown satisfies both machine and human needs
+- **Service injection patterns**: Singleton services prevent resource waste
+- **Language detection precision**: Character heuristics distinguish zh-TW from zh-CN
+- **Test organization matters**: Structured directories improve maintainability
+- **TypeScript strict mode**: Catches integration issues early
+
+## 💡 Key Decisions & Rationale
+
+### Why Hybrid Parsing?
+
+- **Problem**: Pure rules failed on "沖繩明天天氣預報 衝浪條件"
+- **Attempted**: Enhance rules → Still failed on edge cases
+- **Solution**: AI fallback when confidence < 0.5
+- **Result**: 100% success rate, optimal performance
+
+### Why Dynamic Thresholds?
+
+- **Problem**: Fixed 0.5 threshold blocked queries when AI down
+- **Solution**: Lower to 0.3 when AI unavailable
+- **Result**: System remains usable in degraded state
+
+### Why Unified Parameters?
+
+- **Problem**: Tests used `context: { location: "..." }` objects
+- **MCP Philosophy**: Simple string parameters
+- **Solution**: Enforce `context?: string` everywhere
+- **Result**: Consistent API, simpler implementation
+
+### Why Dual-Format Output?
+
+- **Problem**: MCP tools need both machine-readable and human-readable output
+- **User Need**: Claude Desktop users need readable text, APIs need structured data
+- **Solution**: Return array with both JSON and Markdown content
+- **Result**: Best user experience for all consumers
+
+### Why Service Singletons?
+
+- **Problem**: Multiple tool calls created duplicate service instances
+- **Resource Impact**: Unnecessary API key loading, memory waste
+- **Solution**: Static singleton pattern with lazy initialization
+- **Result**: Efficient resource usage, faster subsequent calls
+
+## 🎯 Success Metrics
+
+Track these metrics to ensure healthy system:
+
+1. **Parsing Success Rate**: > 95% (currently 100%)
+2. **AI Fallback Rate**: < 20% (optimize rules for common queries)
+3. **Average Response Time**: < 1.5s
+4. **Cold Start Time**: < 800ms
+5. **Test Coverage**: > 80%
+6. **Chinese Query Success**: 100%
+7. **All 3 MCP Tools**: Functional and compliant with MCP philosophy
+8. **Multi-language Support**: Correct language detection and API responses
+
+## 📋 Checklist for New Features
+
+When adding new capabilities:
+
+- [ ] Update CLAUDE.md with current status
+- [ ] Add real-world test cases from user reports
+- [ ] Test with AND without AI availability
+- [ ] Verify Chinese language handling
+- [ ] Update query-router-hybrid.test.ts
+- [ ] Check performance against targets
+- [ ] Update LEARNING_LOG.md with discoveries
+- [ ] Test in actual Claude Desktop environment
+- [ ] Verify n8n integration still works
+- [ ] Document any new patterns discovered
+- [ ] **Validate dual-format output**: Both JSON and Markdown work correctly
+- [ ] **Test service singletons**: No duplicate initialization
+- [ ] **Verify language detection**: Traditional Chinese responses for zh-TW queries
+
+## 🔧 Common Pitfalls to Avoid
+
+1. **Don't trust unit tests alone** - Test with real Claude Desktop
+2. **Don't assume AI is always available** - Build fallbacks
+3. **Don't use word boundaries with Chinese** - Use character ranges
+4. **Don't hardcode thresholds** - Make them dynamic
+5. **Don't skip integration tests** - They catch real issues
+6. **Don't forget to track parsing source** - Essential for debugging
+7. **Don't accumulate outdated tests** - Delete or update immediately
+8. **Don't ignore language detection edge cases** - Test zh-TW vs zh-CN scenarios
+9. **Don't create duplicate service instances** - Use singleton patterns
+10. **Don't return single-format output** - Provide both JSON and human-readable content
+
+Remember: These principles came from actual production issues and user feedback from Phase 2.1 through Phase 4.2. When in doubt, test with real user scenarios from Claude Desktop!

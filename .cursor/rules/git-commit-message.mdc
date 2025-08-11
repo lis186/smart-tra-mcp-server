@@ -1,0 +1,46 @@
+---
+description: Git Commit Message Format Standards
+globs:
+alwaysApply: false
+---
+
+# Git Commit Message Format Standards
+
+## Basic Format
+
+```
+<type>(<scope>): <subject>
+
+<body>
+
+<footer>
+```
+
+## Subject Line Rules
+
+- Use imperative verb at start (Add, Fix, Update, Remove, etc.)
+- Keep concise and clear, under 50 characters
+- Do not end with period
+- Types include: feat, fix, docs, style, refactor, test, chore, etc.
+
+## Body Guidelines
+
+- Leave blank line after subject
+- Explain "why" this change was made, not just "what" was done
+- Keep each line under 72 characters
+- List important changes
+
+## Language
+
+- Use English
+
+## Example
+
+```
+feat(auth): implement JWT authentication
+
+- Add token generation and validation
+- Set up middleware for protected routes
+- Update user model to handle tokens
+
+Closes #123
