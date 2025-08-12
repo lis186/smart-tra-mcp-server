@@ -13,3 +13,6 @@ coverage/
 *.iml
 .claude/settings.local.json
 test-server.js
+
+# Reference implementations (for learning only, not part of project)
+reference/
