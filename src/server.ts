@@ -47,8 +47,19 @@ class SmartTRAServer {
   
   // TDX API integration
   private tokenCache: CachedToken | null = null;
+  private tokenRefreshPromise: Promise<string> | null = null;
   private stationData: TRAStation[] = [];
   private stationDataLoaded = false;
+  private stationLoadFailed = false;
+  private lastStationLoadAttempt = 0;
+  
+  // Performance indexes for fast station search
+  private stationNameIndex = new Map<string, TRAStation[]>();
+  private stationEnNameIndex = new Map<string, TRAStation[]>();
+  private stationPrefixIndex = new Map<string, TRAStation[]>();
+  
+  // Rate limiting cleanup
+  private lastRateLimitCleanup = Date.now();
   
   // Security limits
   private readonly MAX_QUERY_LENGTH = 1000;
@@ -241,13 +252,30 @@ class SmartTRAServer {
     });
   }
 
-  // TDX API Authentication
+  // TDX API Authentication with race condition protection
   private async getAccessToken(): Promise<string> {
     // Check cache first
     if (this.tokenCache && this.tokenCache.expiresAt > Date.now()) {
       return this.tokenCache.token;
     }
 
+    // If token refresh is already in progress, wait for it
+    if (this.tokenRefreshPromise) {
+      return await this.tokenRefreshPromise;
+    }
+
+    // Start token refresh
+    this.tokenRefreshPromise = this.refreshToken();
+    
+    try {
+      const token = await this.tokenRefreshPromise;
+      return token;
+    } finally {
+      this.tokenRefreshPromise = null;
+    }
+  }
+
+  private async refreshToken(): Promise<string> {
     const clientId = process.env.TDX_CLIENT_ID;
     const clientSecret = process.env.TDX_CLIENT_SECRET;
     const authUrl = process.env.TDX_AUTH_URL || 'https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token';
@@ -288,9 +316,17 @@ class SmartTRAServer {
     return tokenData.access_token;
   }
 
-  // Load station data from TDX API
+  // Load station data from TDX API with failure state tracking
   private async loadStationData(): Promise<void> {
     if (this.stationDataLoaded) return;
+    
+    // Avoid repeated failed attempts (retry once per 5 minutes)
+    const now = Date.now();
+    if (this.stationLoadFailed && (now - this.lastStationLoadAttempt) < 300000) {
+      return;
+    }
+
+    this.lastStationLoadAttempt = now;
 
     try {
       console.log('Loading TRA station data from TDX API...');
@@ -309,23 +345,58 @@ class SmartTRAServer {
       }
 
       this.stationData = await response.json() as TRAStation[];
+      this.buildSearchIndexes();
       this.stationDataLoaded = true;
+      this.stationLoadFailed = false;
       console.log(`Loaded ${this.stationData.length} TRA stations from TDX API`);
     } catch (error) {
       console.error('Failed to load station data:', error);
-      // Don't fail server startup, but mark as not loaded
       this.stationDataLoaded = false;
+      this.stationLoadFailed = true;
     }
   }
 
-  // Search stations with fuzzy matching
+  // Build search indexes for performance
+  private buildSearchIndexes(): void {
+    this.stationNameIndex.clear();
+    this.stationEnNameIndex.clear();
+    this.stationPrefixIndex.clear();
+
+    for (const station of this.stationData) {
+      const zhName = station.StationName.Zh_tw.toLowerCase();
+      const enName = station.StationName.En.toLowerCase();
+
+      // Index by full names
+      this.addToIndex(this.stationNameIndex, zhName, station);
+      this.addToIndex(this.stationEnNameIndex, enName, station);
+
+      // Index by prefixes (up to 3 characters)
+      for (let i = 1; i <= Math.min(3, zhName.length); i++) {
+        this.addToIndex(this.stationPrefixIndex, zhName.substring(0, i), station);
+      }
+      for (let i = 1; i <= Math.min(3, enName.length); i++) {
+        this.addToIndex(this.stationPrefixIndex, enName.substring(0, i), station);
+      }
+    }
+
+    console.log(`Built search indexes: ${this.stationNameIndex.size} names, ${this.stationPrefixIndex.size} prefixes`);
+  }
+
+  private addToIndex(index: Map<string, TRAStation[]>, key: string, station: TRAStation): void {
+    if (!index.has(key)) {
+      index.set(key, []);
+    }
+    index.get(key)!.push(station);
+  }
+
+  // Search stations with optimized fuzzy matching using indexes
   private searchStations(query: string): StationSearchResult[] {
     if (!this.stationDataLoaded || this.stationData.length === 0) {
       return [];
     }
 
     const normalizedQuery = query.trim().toLowerCase();
-    const results: StationSearchResult[] = [];
+    const results = new Map<string, StationSearchResult>();
 
     // Common abbreviations and aliases
     const aliases = new Map([
@@ -338,48 +409,55 @@ class SmartTRAServer {
       ['桃園', '桃園'],
     ]);
 
-    // Check if query is an alias
     const expandedQuery = aliases.get(normalizedQuery) || normalizedQuery;
+    const candidateStations = new Set<TRAStation>();
 
-    for (const station of this.stationData) {
-      const zhName = station.StationName.Zh_tw.toLowerCase();
-      const enName = station.StationName.En.toLowerCase();
-      
-      let confidence = 0;
-      
-      // Exact match (highest confidence)
-      if (zhName === normalizedQuery || zhName === expandedQuery || enName === normalizedQuery) {
-        confidence = 1.0;
-      }
-      // Starts with query
-      else if (zhName.startsWith(normalizedQuery) || zhName.startsWith(expandedQuery) || enName.startsWith(normalizedQuery)) {
-        confidence = 0.9;
-      }
-      // Contains query
-      else if (zhName.includes(normalizedQuery) || zhName.includes(expandedQuery) || enName.includes(normalizedQuery)) {
-        confidence = 0.7;
-      }
-      // Partial match for longer queries
-      else if (normalizedQuery.length >= 2 && (zhName.includes(normalizedQuery.substring(0, 2)) || enName.includes(normalizedQuery.substring(0, 2)))) {
-        confidence = 0.5;
-      }
+    // 1. Exact matches from indexes (highest confidence)
+    const exactMatches = this.stationNameIndex.get(normalizedQuery) || [];
+    const exactExpandedMatches = this.stationNameIndex.get(expandedQuery) || [];
+    const exactEnMatches = this.stationEnNameIndex.get(normalizedQuery) || [];
+    
+    [...exactMatches, ...exactExpandedMatches, ...exactEnMatches].forEach(station => {
+      candidateStations.add(station);
+      this.addSearchResult(results, station, 1.0);
+    });
 
-      if (confidence > 0) {
-        results.push({
-          stationId: station.StationID,
-          name: station.StationName.Zh_tw,
-          confidence,
-          address: station.StationAddress,
-          coordinates: station.StationPosition ? {
-            lat: station.StationPosition.PositionLat,
-            lon: station.StationPosition.PositionLon
-          } : undefined
-        });
-      }
+    // 2. Prefix matches (high confidence)
+    for (let i = Math.min(3, normalizedQuery.length); i >= 1; i--) {
+      const prefix = normalizedQuery.substring(0, i);
+      const prefixMatches = this.stationPrefixIndex.get(prefix) || [];
+      
+      prefixMatches.forEach(station => {
+        if (!candidateStations.has(station)) {
+          candidateStations.add(station);
+          const zhName = station.StationName.Zh_tw.toLowerCase();
+          const enName = station.StationName.En.toLowerCase();
+          
+          if (zhName.startsWith(normalizedQuery) || zhName.startsWith(expandedQuery) || enName.startsWith(normalizedQuery)) {
+            this.addSearchResult(results, station, 0.9);
+          } else if (zhName.includes(normalizedQuery) || zhName.includes(expandedQuery) || enName.includes(normalizedQuery)) {
+            this.addSearchResult(results, station, 0.7);
+          }
+        }
+      });
     }
 
-    // Sort by confidence (highest first), then by name
-    results.sort((a, b) => {
+    // 3. Fallback: broader search for partial matches (lower confidence)
+    if (results.size < 3 && normalizedQuery.length >= 2) {
+      const partialQuery = normalizedQuery.substring(0, 2);
+      const partialMatches = this.stationPrefixIndex.get(partialQuery) || [];
+      
+      partialMatches.forEach(station => {
+        if (!candidateStations.has(station)) {
+          candidateStations.add(station);
+          this.addSearchResult(results, station, 0.5);
+        }
+      });
+    }
+
+    // Convert to array and sort
+    const finalResults = Array.from(results.values());
+    finalResults.sort((a, b) => {
       if (b.confidence !== a.confidence) {
         return b.confidence - a.confidence;
       }
@@ -387,7 +465,23 @@ class SmartTRAServer {
     });
 
     // Return top 5 matches
-    return results.slice(0, 5);
+    return finalResults.slice(0, 5);
+  }
+
+  private addSearchResult(results: Map<string, StationSearchResult>, station: TRAStation, confidence: number): void {
+    const key = station.StationID;
+    if (!results.has(key) || results.get(key)!.confidence < confidence) {
+      results.set(key, {
+        stationId: station.StationID,
+        name: station.StationName.Zh_tw,
+        confidence,
+        address: station.StationAddress,
+        coordinates: station.StationPosition ? {
+          lat: station.StationPosition.PositionLat,
+          lon: station.StationPosition.PositionLon
+        } : undefined
+      });
+    }
   }
 
   // Handle search_station tool request
@@ -489,7 +583,13 @@ class SmartTRAServer {
     const now = Date.now();
     const windowStart = now - this.RATE_LIMIT_WINDOW;
     
-    // Clean old entries
+    // Periodic cleanup to prevent memory leaks (every 5 minutes)
+    if (now - this.lastRateLimitCleanup > 300000) {
+      this.cleanupRateLimiting(windowStart);
+      this.lastRateLimitCleanup = now;
+    }
+    
+    // Clean old entries for current window
     for (const [id, time] of this.lastRequestTime.entries()) {
       if (time < windowStart) {
         this.requestCount.delete(id);
@@ -511,6 +611,23 @@ class SmartTRAServer {
     // Log security event for monitoring
     if (newCount > this.RATE_LIMIT_MAX_REQUESTS * 0.8) {
       console.error(`Security: Client ${clientId} approaching rate limit: ${newCount}/${this.RATE_LIMIT_MAX_REQUESTS}`);
+    }
+  }
+
+  private cleanupRateLimiting(cutoffTime: number): void {
+    const beforeCount = this.requestCount.size;
+    
+    // Remove all entries older than cutoff
+    for (const [id, time] of this.lastRequestTime.entries()) {
+      if (time < cutoffTime) {
+        this.requestCount.delete(id);
+        this.lastRequestTime.delete(id);
+      }
+    }
+    
+    const afterCount = this.requestCount.size;
+    if (beforeCount !== afterCount) {
+      console.log(`Rate limit cleanup: removed ${beforeCount - afterCount} inactive clients`);
     }
   }
 
