@@ -14,5 +14,9 @@ coverage/
 .claude/settings.local.json
 test-server.js
 
+# Test results and temporary files
+tdx-auth-test-results.json
+*-test-results.json
+
 # Reference implementations (for learning only, not part of project)
 reference/
