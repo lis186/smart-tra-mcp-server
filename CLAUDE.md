@@ -6,29 +6,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Smart TRA MCP Server - An intelligent Taiwan Railway Administration (TRA) query server following the Model Context Protocol (MCP) design philosophy. This project integrates TDX (Transport Data eXchange) Taiwan railway APIs through natural language interfaces, providing train schedules, real-time information, fare queries, and trip planning.
 
-**Project Status**: Planning phase - Repository contains reference implementations and documentation
+**Project Status**: Active Development - Stage 1 Complete
 
-**🎯 Current Status**: Planning phase
+**🎯 Current Status**: Stage 1 Complete - MCP Foundation Validated
 
 ## Commands
 
 ### Development Commands
 
-Currently, no package.json exists in the root directory. Based on reference implementations:
-
-**Expected commands (to be implemented):**
+**Available commands:**
 
 ```bash
 # Development
-npm run dev          # Start development server
-npm run dev:stdio    # STDIO mode for Claude Desktop
-npm run dev:http     # HTTP mode for web clients
-
-# Build & Production
+npm run dev          # Build and start development server (STDIO mode)
 npm run build        # Build TypeScript to JavaScript
 npm start            # Run production server
 
-# Testing
+# Testing (to be implemented)
 npm test             # Run test suite
 ```
 
@@ -342,10 +336,16 @@ Based on `prd.md` and `spec.md`:
 
 ```text
 smart-tra-mcp-server/
-├── .cursor/rules/           # Development principles and guidelines
+├── src/                     # Source code
+│   └── server.ts            # Main MCP server implementation
+├── dist/                    # Compiled JavaScript (gitignored)
 ├── reference/               # Reference implementations
 │   ├── tdx-tra-mcp-server/  # Direct TDX API integration (50+ tools)
 │   └── smart-weather-mcp-server/ # Weather MCP with user-intent design
+├── .cursor/rules/           # Development principles and guidelines
+├── package.json             # Node.js project configuration
+├── tsconfig.json            # TypeScript configuration
+├── IMPLEMENTATION_PLAN.md   # Staged development plan (Stage 1 ✅)
 ├── prd.md                   # Product requirements document
 ├── spec.md                  # Technical specifications
 └── CLAUDE.md                # This file
@@ -353,11 +353,12 @@ smart-tra-mcp-server/
 
 ## Next Steps
 
-1. Initialize npm project with TypeScript configuration
-2. Set up basic MCP server structure following smart-weather-mcp-server patterns
-3. Implement TDX OAuth client based on tdx-tra-mcp-server reference
-4. Begin with `search_station` tool as the simplest starting point
-5. Iterate through remaining tools following the phased approach
+1. ✅ ~~Initialize npm project with TypeScript configuration~~ (Stage 1 Complete)
+2. ✅ ~~Set up basic MCP server structure~~ (Stage 1 Complete)
+3. Stage 2: STDIO Transport - Test with Claude Desktop
+4. Stage 3: TDX Authentication - Implement OAuth client
+5. Stage 4: Implement `search_station` tool
+6. Continue with remaining stages per IMPLEMENTATION_PLAN.md
 
 ## Implementation Best Practices
 
@@ -378,6 +379,8 @@ smart-tra-mcp-server/
 4. **Other Principles** - Optimize based on above three
 
 ### Quality Gates
+
+- Validate (build + tests + lint) must pass before every commit
 
 #### Definition of Done
 
