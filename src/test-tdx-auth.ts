@@ -6,8 +6,6 @@
 
 import { getTDXToken, testTDXApiCall, TDXAuthenticationError, TDXApiError } from './tdx-auth.js';
 import * as dotenv from 'dotenv';
-import * as fs from 'fs';
-import * as path from 'path';
 
 // Load environment variables
 dotenv.config();
@@ -53,20 +51,6 @@ async function main() {
     }
     
     console.log('\n🎉 Stage 3 validation complete! TDX authentication is working.');
-    
-    // Save test results for documentation (no sensitive info)
-    const testResults = {
-      timestamp: new Date().toISOString(),
-      success: true,
-      apiResponse: {
-        stationCount: Array.isArray(stations) ? stations.length : 0,
-        sampleStation: stations[0]?.StationName?.Zh_tw || 'Unknown'
-      }
-    };
-    
-    const resultsPath = path.join(process.cwd(), 'tdx-auth-test-results.json');
-    fs.writeFileSync(resultsPath, JSON.stringify(testResults, null, 2));
-    console.log(`\nTest results saved to: ${resultsPath}`);
     
   } catch (error) {
     console.error('❌ Test failed:', error);
