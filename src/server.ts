@@ -6,6 +6,37 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import * as dotenv from 'dotenv';
+
+// Load environment variables
+dotenv.config();
+
+// TDX API Types
+interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+}
+
+interface CachedToken {
+  token: string;
+  expiresAt: number;
+}
+
+interface TRAStation {
+  StationID: string;
+  StationName: { Zh_tw: string; En: string };
+  StationAddress?: string;
+  StationPosition?: { PositionLat: number; PositionLon: number };
+}
+
+interface StationSearchResult {
+  stationId: string;
+  name: string;
+  confidence: number;
+  address?: string;
+  coordinates?: { lat: number; lon: number };
+}
 
 class SmartTRAServer {
   private server: Server;
@@ -13,6 +44,11 @@ class SmartTRAServer {
   private requestCount = new Map<string, number>();
   private lastRequestTime = new Map<string, number>();
   private readonly sessionId: string;
+  
+  // TDX API integration
+  private tokenCache: CachedToken | null = null;
+  private stationData: TRAStation[] = [];
+  private stationDataLoaded = false;
   
   // Security limits
   private readonly MAX_QUERY_LENGTH = 1000;
@@ -39,6 +75,7 @@ class SmartTRAServer {
 
     this.setupHandlers();
     this.setupGracefulShutdown();
+    this.loadStationData();
   }
 
   private setupHandlers() {
@@ -182,18 +219,7 @@ class SmartTRAServer {
           };
 
         case 'search_station':
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `[STAGE 2 MOCK] Station search for: "${sanitizedQuery}"${sanitizedContext ? ` (context: ${sanitizedContext})` : ''}\n\n` +
-                      `🚉 This is a mock response demonstrating MCP protocol functionality.\n` +
-                      `✅ Query validated, sanitized, and rate-limited successfully.\n` +
-                      `🔄 Real TDX station data integration coming in Stage 3.\n\n` +
-                      `Expected future response: Station information, coordinates, services.`,
-              },
-            ],
-          };
+          return await this.handleSearchStation(sanitizedQuery, sanitizedContext);
 
         case 'plan_trip':
           return {
@@ -213,6 +239,250 @@ class SmartTRAServer {
           throw new Error(`Unknown tool: ${name}`);
       }
     });
+  }
+
+  // TDX API Authentication
+  private async getAccessToken(): Promise<string> {
+    // Check cache first
+    if (this.tokenCache && this.tokenCache.expiresAt > Date.now()) {
+      return this.tokenCache.token;
+    }
+
+    const clientId = process.env.TDX_CLIENT_ID;
+    const clientSecret = process.env.TDX_CLIENT_SECRET;
+    const authUrl = process.env.TDX_AUTH_URL || 'https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token';
+
+    if (!clientId || !clientSecret) {
+      throw new Error('TDX credentials not configured. Please set TDX_CLIENT_ID and TDX_CLIENT_SECRET environment variables.');
+    }
+
+    const body = new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: clientId,
+      client_secret: clientSecret
+    });
+
+    const response = await fetch(authUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`TDX authentication failed: ${response.status} ${response.statusText} - ${errorText}`);
+    }
+
+    const tokenData = await response.json() as TokenResponse;
+    
+    // Cache the token (expires in 24 hours minus 5 minutes for safety)
+    const expiresAt = Date.now() + (tokenData.expires_in - 300) * 1000;
+    this.tokenCache = {
+      token: tokenData.access_token,
+      expiresAt
+    };
+    
+    console.log('TDX access token obtained successfully');
+    return tokenData.access_token;
+  }
+
+  // Load station data from TDX API
+  private async loadStationData(): Promise<void> {
+    if (this.stationDataLoaded) return;
+
+    try {
+      console.log('Loading TRA station data from TDX API...');
+      const token = await this.getAccessToken();
+      const baseUrl = process.env.TDX_BASE_URL || 'https://tdx.transportdata.tw/api/basic';
+      
+      const response = await fetch(`${baseUrl}/v2/Rail/TRA/Station?%24format=JSON`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to load station data: ${response.status} ${response.statusText}`);
+      }
+
+      this.stationData = await response.json() as TRAStation[];
+      this.stationDataLoaded = true;
+      console.log(`Loaded ${this.stationData.length} TRA stations from TDX API`);
+    } catch (error) {
+      console.error('Failed to load station data:', error);
+      // Don't fail server startup, but mark as not loaded
+      this.stationDataLoaded = false;
+    }
+  }
+
+  // Search stations with fuzzy matching
+  private searchStations(query: string): StationSearchResult[] {
+    if (!this.stationDataLoaded || this.stationData.length === 0) {
+      return [];
+    }
+
+    const normalizedQuery = query.trim().toLowerCase();
+    const results: StationSearchResult[] = [];
+
+    // Common abbreviations and aliases
+    const aliases = new Map([
+      ['北車', '臺北'],
+      ['台北', '臺北'],
+      ['台中', '臺中'],
+      ['台南', '臺南'],
+      ['高雄', '高雄'],
+      ['板橋', '板橋'],
+      ['桃園', '桃園'],
+    ]);
+
+    // Check if query is an alias
+    const expandedQuery = aliases.get(normalizedQuery) || normalizedQuery;
+
+    for (const station of this.stationData) {
+      const zhName = station.StationName.Zh_tw.toLowerCase();
+      const enName = station.StationName.En.toLowerCase();
+      
+      let confidence = 0;
+      
+      // Exact match (highest confidence)
+      if (zhName === normalizedQuery || zhName === expandedQuery || enName === normalizedQuery) {
+        confidence = 1.0;
+      }
+      // Starts with query
+      else if (zhName.startsWith(normalizedQuery) || zhName.startsWith(expandedQuery) || enName.startsWith(normalizedQuery)) {
+        confidence = 0.9;
+      }
+      // Contains query
+      else if (zhName.includes(normalizedQuery) || zhName.includes(expandedQuery) || enName.includes(normalizedQuery)) {
+        confidence = 0.7;
+      }
+      // Partial match for longer queries
+      else if (normalizedQuery.length >= 2 && (zhName.includes(normalizedQuery.substring(0, 2)) || enName.includes(normalizedQuery.substring(0, 2)))) {
+        confidence = 0.5;
+      }
+
+      if (confidence > 0) {
+        results.push({
+          stationId: station.StationID,
+          name: station.StationName.Zh_tw,
+          confidence,
+          address: station.StationAddress,
+          coordinates: station.StationPosition ? {
+            lat: station.StationPosition.PositionLat,
+            lon: station.StationPosition.PositionLon
+          } : undefined
+        });
+      }
+    }
+
+    // Sort by confidence (highest first), then by name
+    results.sort((a, b) => {
+      if (b.confidence !== a.confidence) {
+        return b.confidence - a.confidence;
+      }
+      return a.name.localeCompare(b.name);
+    });
+
+    // Return top 5 matches
+    return results.slice(0, 5);
+  }
+
+  // Handle search_station tool request
+  private async handleSearchStation(query: string, context?: string): Promise<any> {
+    try {
+      // Ensure station data is loaded
+      if (!this.stationDataLoaded) {
+        await this.loadStationData();
+      }
+
+      if (!this.stationDataLoaded) {
+        return {
+          content: [{
+            type: 'text',
+            text: '⚠️ Station data is not available. Please check TDX credentials and network connection.'
+          }]
+        };
+      }
+
+      const results = this.searchStations(query);
+
+      if (results.length === 0) {
+        return {
+          content: [{
+            type: 'text',
+            text: `❌ No stations found for "${query}"\n\n` +
+                  `Suggestions:\n` +
+                  `• Check spelling (try "台北", "台中", "高雄")\n` +
+                  `• Use common abbreviations like "北車" for Taipei Main Station\n` +
+                  `• Try partial station names`
+          }]
+        };
+      }
+
+      const main = results[0];
+      const alternatives = results.slice(1);
+      const needsConfirmation = main.confidence < 0.9 || alternatives.length > 0;
+
+      // Format response
+      let responseText = '';
+      
+      if (main.confidence >= 0.9) {
+        responseText += `✅ Found station: **${main.name}**\n`;
+      } else {
+        responseText += `🔍 Best match: **${main.name}** (confidence: ${Math.round(main.confidence * 100)}%)\n`;
+      }
+      
+      responseText += `• Station ID: ${main.stationId}\n`;
+      if (main.address) {
+        responseText += `• Address: ${main.address}\n`;
+      }
+      if (main.coordinates) {
+        responseText += `• Coordinates: ${main.coordinates.lat}, ${main.coordinates.lon}\n`;
+      }
+
+      if (alternatives.length > 0) {
+        responseText += `\n**Other possibilities:**\n`;
+        alternatives.forEach((alt, index) => {
+          responseText += `${index + 2}. ${alt.name} (confidence: ${Math.round(alt.confidence * 100)}%)\n`;
+        });
+      }
+
+      // Include structured data for follow-up tools
+      const structuredData = JSON.stringify({
+        main: {
+          stationId: main.stationId,
+          name: main.name,
+          confidence: main.confidence
+        },
+        alternatives: alternatives.map(alt => ({
+          stationId: alt.stationId,
+          name: alt.name,
+          confidence: alt.confidence
+        })),
+        needsConfirmation
+      }, null, 2);
+
+      responseText += `\n\n**Machine-readable data:**\n\`\`\`json\n${structuredData}\n\`\`\``;
+
+      return {
+        content: [{
+          type: 'text',
+          text: responseText
+        }]
+      };
+
+    } catch (error) {
+      console.error('Error in handleSearchStation:', error);
+      return {
+        content: [{
+          type: 'text',
+          text: `❌ Error searching stations: ${error instanceof Error ? error.message : String(error)}`
+        }]
+      };
+    }
   }
 
   private checkRateLimit(clientId: string): void {
