@@ -108,8 +108,15 @@ class SmartTRAServer {
         throw new Error('Invalid query: must be a non-empty string');
       }
 
-      // Sanitize query for logging (remove potential control characters)
+      // Validate context parameter if provided
+      const context = args.context;
+      if (context !== undefined && typeof context !== 'string') {
+        throw new Error('Invalid context: must be a string if provided');
+      }
+
+      // Sanitize inputs for logging (remove potential control characters)
       const sanitizedQuery = query.replace(/[\x00-\x1f\x7f-\x9f]/g, '');
+      const sanitizedContext = context ? context.replace(/[\x00-\x1f\x7f-\x9f]/g, '') : undefined;
 
       switch (name) {
         case 'search_trains':
@@ -117,7 +124,7 @@ class SmartTRAServer {
             content: [
               {
                 type: 'text',
-                text: `Mock response for search_trains: ${sanitizedQuery}`,
+                text: `Mock response for search_trains: ${sanitizedQuery}${sanitizedContext ? ` (context: ${sanitizedContext})` : ''}`,
               },
             ],
           };
@@ -127,7 +134,7 @@ class SmartTRAServer {
             content: [
               {
                 type: 'text',
-                text: `Mock response for search_station: ${sanitizedQuery}`,
+                text: `Mock response for search_station: ${sanitizedQuery}${sanitizedContext ? ` (context: ${sanitizedContext})` : ''}`,
               },
             ],
           };
@@ -137,7 +144,7 @@ class SmartTRAServer {
             content: [
               {
                 type: 'text',
-                text: `Mock response for plan_trip: ${sanitizedQuery}`,
+                text: `Mock response for plan_trip: ${sanitizedQuery}${sanitizedContext ? ` (context: ${sanitizedContext})` : ''}`,
               },
             ],
           };
@@ -149,19 +156,22 @@ class SmartTRAServer {
   }
 
   private setupGracefulShutdown() {
-    const gracefulShutdown = async (signal: string) => {
-      console.log(`Received ${signal}, starting graceful shutdown...`);
-      this.isShuttingDown = true;
-      
-      // Give ongoing requests time to complete
-      setTimeout(() => {
-        console.log('Graceful shutdown complete');
-        process.exit(0);
-      }, 1000);
-    };
+    // Only set up shutdown handlers if not in test environment
+    if (process.env.NODE_ENV !== 'test' && process.env.JEST_WORKER_ID === undefined) {
+      const gracefulShutdown = async (signal: string) => {
+        console.log(`Received ${signal}, starting graceful shutdown...`);
+        this.isShuttingDown = true;
+        
+        // Give ongoing requests time to complete
+        setTimeout(() => {
+          console.log('Graceful shutdown complete');
+          process.exit(0);
+        }, 1000);
+      };
 
-    process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-    process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+      process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+      process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+    }
   }
 
   async start() {
