@@ -12,6 +12,7 @@ class SmartTRAServer {
   private isShuttingDown = false;
   private requestCount = new Map<string, number>();
   private lastRequestTime = new Map<string, number>();
+  private readonly sessionId: string;
   
   // Security limits
   private readonly MAX_QUERY_LENGTH = 1000;
@@ -21,6 +22,9 @@ class SmartTRAServer {
   private readonly GRACEFUL_SHUTDOWN_TIMEOUT = 5000; // 5 seconds
 
   constructor() {
+    // Generate unique session identifier for rate limiting
+    this.sessionId = `pid-${process.pid}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    
     this.server = new Server(
       {
         name: 'smart-tra-mcp-server',
@@ -105,11 +109,32 @@ class SmartTRAServer {
         throw new Error('Server is shutting down');
       }
 
-      const { name, arguments: args } = request.params;
+      let name: string;
+      let args: Record<string, any>;
 
-      // Input validation
-      if (!args || typeof args !== 'object') {
-        throw new Error('Invalid arguments: expected object');
+      try {
+        const params = request.params;
+        name = params.name;
+        args = params.arguments || {};
+
+        // Enhanced input validation with error handling
+        if (!args || typeof args !== 'object') {
+          throw new Error('Invalid arguments: expected object');
+        }
+
+        // Additional safety check for args structure
+        if (Array.isArray(args)) {
+          throw new Error('Invalid arguments: expected object, got array');
+        }
+
+        // Ensure args can be safely accessed
+        if (args === null) {
+          throw new Error('Invalid arguments: arguments cannot be null');
+        }
+      } catch (error) {
+        // Log security event for malformed requests
+        console.error(`Security: Malformed request from session ${this.sessionId}:`, error instanceof Error ? error.message : String(error));
+        throw error;
       }
 
       const query = args.query;
@@ -132,20 +157,26 @@ class SmartTRAServer {
         throw new Error(`Context too long: maximum ${this.MAX_CONTEXT_LENGTH} characters allowed`);
       }
       
-      // Basic rate limiting (use a simple client identifier)
-      this.checkRateLimit('stdio-client');
+      // Rate limiting with session-based identification
+      this.checkRateLimit(this.sessionId);
 
       // Sanitize inputs for logging (remove potential control characters)
       const sanitizedQuery = query.replace(/[\x00-\x1f\x7f-\x9f]/g, '');
       const sanitizedContext = context ? context.replace(/[\x00-\x1f\x7f-\x9f]/g, '') : undefined;
 
+      // STAGE 2 FOUNDATION: Mock responses for MCP protocol validation
+      // These will be replaced with real TDX API integration in Stage 3
       switch (name) {
         case 'search_trains':
           return {
             content: [
               {
                 type: 'text',
-                text: `Mock response for search_trains: ${sanitizedQuery}${sanitizedContext ? ` (context: ${sanitizedContext})` : ''}`,
+                text: `[STAGE 2 MOCK] Train search for: "${sanitizedQuery}"${sanitizedContext ? ` (context: ${sanitizedContext})` : ''}\n\n` +
+                      `🚄 This is a mock response demonstrating MCP protocol functionality.\n` +
+                      `✅ Query validated, sanitized, and rate-limited successfully.\n` +
+                      `🔄 Real TDX train data integration coming in Stage 3.\n\n` +
+                      `Expected future response: Train schedules, real-time status, fares.`,
               },
             ],
           };
@@ -155,7 +186,11 @@ class SmartTRAServer {
             content: [
               {
                 type: 'text',
-                text: `Mock response for search_station: ${sanitizedQuery}${sanitizedContext ? ` (context: ${sanitizedContext})` : ''}`,
+                text: `[STAGE 2 MOCK] Station search for: "${sanitizedQuery}"${sanitizedContext ? ` (context: ${sanitizedContext})` : ''}\n\n` +
+                      `🚉 This is a mock response demonstrating MCP protocol functionality.\n` +
+                      `✅ Query validated, sanitized, and rate-limited successfully.\n` +
+                      `🔄 Real TDX station data integration coming in Stage 3.\n\n` +
+                      `Expected future response: Station information, coordinates, services.`,
               },
             ],
           };
@@ -165,7 +200,11 @@ class SmartTRAServer {
             content: [
               {
                 type: 'text',
-                text: `Mock response for plan_trip: ${sanitizedQuery}${sanitizedContext ? ` (context: ${sanitizedContext})` : ''}`,
+                text: `[STAGE 2 MOCK] Trip planning for: "${sanitizedQuery}"${sanitizedContext ? ` (context: ${sanitizedContext})` : ''}\n\n` +
+                      `🗺️ This is a mock response demonstrating MCP protocol functionality.\n` +
+                      `✅ Query validated, sanitized, and rate-limited successfully.\n` +
+                      `🔄 Real TDX trip planning integration coming in Stage 3.\n\n` +
+                      `Expected future response: Route options, timing, transfers, costs.`,
               },
             ],
           };
@@ -248,8 +287,39 @@ class SmartTRAServer {
     return {
       status: this.isShuttingDown ? 'shutting_down' : 'healthy',
       timestamp: new Date().toISOString(),
-      version: '1.0.0'
+      version: '1.0.0',
+      sessionId: this.sessionId
     };
+  }
+
+  // Test helper methods for better test isolation
+  resetRateLimitingForTest(): void {
+    if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID !== undefined) {
+      this.requestCount.clear();
+      this.lastRequestTime.clear();
+    }
+  }
+
+  setRateLimitForTest(clientId: string, count: number, timestamp?: number): void {
+    if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID !== undefined) {
+      this.requestCount.set(clientId, count);
+      this.lastRequestTime.set(clientId, timestamp || Date.now());
+    }
+  }
+
+  getSessionIdForTest(): string {
+    if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID !== undefined) {
+      return this.sessionId;
+    }
+    throw new Error('Test methods only available in test environment');
+  }
+
+  checkRateLimitForTest(clientId: string): void {
+    if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID !== undefined) {
+      this.checkRateLimit(clientId);
+    } else {
+      throw new Error('Test methods only available in test environment');
+    }
   }
 }
 
