@@ -7,6 +7,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import * as dotenv from 'dotenv';
+import { QueryParser, ParsedQuery } from './query-parser.js';
 
 // Load environment variables
 dotenv.config();
@@ -53,6 +54,9 @@ class SmartTRAServer {
   private stationLoadFailed = false;
   private lastStationLoadAttempt = 0;
   
+  // Query parsing
+  private queryParser: QueryParser;
+  
   // Performance indexes for fast station search
   private stationNameIndex = new Map<string, TRAStation[]>();
   private stationEnNameIndex = new Map<string, TRAStation[]>();
@@ -71,6 +75,9 @@ class SmartTRAServer {
   constructor() {
     // Generate unique session identifier for rate limiting
     this.sessionId = `pid-${process.pid}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    
+    // Initialize query parser
+    this.queryParser = new QueryParser();
     
     this.server = new Server(
       {
@@ -216,18 +223,7 @@ class SmartTRAServer {
       // These will be replaced with real TDX API integration in Stage 3
       switch (name) {
         case 'search_trains':
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `[STAGE 2 MOCK] Train search for: "${sanitizedQuery}"${sanitizedContext ? ` (context: ${sanitizedContext})` : ''}\n\n` +
-                      `🚄 This is a mock response demonstrating MCP protocol functionality.\n` +
-                      `✅ Query validated, sanitized, and rate-limited successfully.\n` +
-                      `🔄 Real TDX train data integration coming in Stage 3.\n\n` +
-                      `Expected future response: Train schedules, real-time status, fares.`,
-              },
-            ],
-          };
+          return await this.handleSearchTrains(sanitizedQuery, sanitizedContext);
 
         case 'search_station':
           return await this.handleSearchStation(sanitizedQuery, sanitizedContext);
@@ -577,6 +573,158 @@ class SmartTRAServer {
         }]
       };
     }
+  }
+
+  // Handle search_trains tool request with query parsing
+  private async handleSearchTrains(query: string, context?: string): Promise<any> {
+    try {
+      // Parse the natural language query
+      const parsed = this.queryParser.parse(query);
+      
+      // Check if we have enough information to proceed
+      if (!this.queryParser.isValidForTrainSearch(parsed)) {
+        const suggestions = this.generateSuggestions(parsed);
+        return {
+          content: [{
+            type: 'text',
+            text: `⚠️ Need more information to search trains.\n\n` +
+                  `**What I understood:**\n${this.queryParser.getSummary(parsed)}\n\n` +
+                  `**Missing information:**\n${suggestions}\n\n` +
+                  `**Examples of valid queries:**\n` +
+                  `• "台北到台中明天早上"\n` +
+                  `• "高雄去台北下午2點最快"\n` +
+                  `• "桃園到新竹今天晚上直達車"`
+          }]
+        };
+      }
+
+      // Validate stations using search_station functionality
+      const stationValidation = await this.validateStations(parsed);
+      if (!stationValidation.valid) {
+        return {
+          content: [{
+            type: 'text',
+            text: `❌ Station validation failed:\n\n${stationValidation.message}\n\n` +
+                  `**What I understood:**\n${this.queryParser.getSummary(parsed)}`
+          }]
+        };
+      }
+
+      // Format response with parsed information and next steps
+      let responseText = `🚄 **Train Search Query Parsed Successfully**\n\n`;
+      responseText += `**Journey:** ${parsed.origin} → ${parsed.destination}\n`;
+      
+      if (parsed.date) {
+        responseText += `**Date:** ${parsed.date}\n`;
+      }
+      if (parsed.time) {
+        responseText += `**Time:** ${parsed.time}\n`;
+      }
+      if (parsed.preferences?.trainType) {
+        responseText += `**Train Type:** ${parsed.preferences.trainType}\n`;
+      }
+      if (parsed.preferences?.fastest) {
+        responseText += `**Priority:** Fastest route\n`;
+      } else if (parsed.preferences?.cheapest) {
+        responseText += `**Priority:** Cheapest fare\n`;
+      }
+      if (parsed.preferences?.directOnly) {
+        responseText += `**Requirement:** Direct trains only\n`;
+      }
+      
+      responseText += `**Confidence:** ${Math.round(parsed.confidence * 100)}%\n\n`;
+      
+      // Add machine-readable data for future integration
+      const structuredData = JSON.stringify({
+        parsed: {
+          origin: parsed.origin,
+          destination: parsed.destination,
+          date: parsed.date,
+          time: parsed.time,
+          preferences: parsed.preferences,
+          confidence: parsed.confidence
+        },
+        status: 'ready_for_timetable_api',
+        nextStep: 'Call TDX timetable API with validated parameters'
+      }, null, 2);
+      
+      responseText += `[STAGE 5] Query parsing successful! Ready for TDX API integration in Stage 6.\n\n`;
+      responseText += `**Machine-readable data:**\n\`\`\`json\n${structuredData}\n\`\`\``;
+
+      return {
+        content: [{
+          type: 'text',
+          text: responseText
+        }]
+      };
+
+    } catch (error) {
+      console.error('Error in handleSearchTrains:', error);
+      return {
+        content: [{
+          type: 'text',
+          text: `❌ Error parsing train search query: ${error instanceof Error ? error.message : String(error)}`
+        }]
+      };
+    }
+  }
+
+  // Generate suggestions for incomplete queries
+  private generateSuggestions(parsed: ParsedQuery): string {
+    const missing = [];
+    
+    if (!parsed.origin) {
+      missing.push('• Starting station (e.g., "台北", "高雄")');
+    }
+    if (!parsed.destination) {
+      missing.push('• Destination station (e.g., "台中", "桃園")');
+    }
+    if (!parsed.date && !parsed.time) {
+      missing.push('• When to travel (e.g., "明天", "下午3點", "今天早上")');
+    }
+    
+    return missing.join('\n');
+  }
+
+  // Validate station names using existing search functionality
+  private async validateStations(parsed: ParsedQuery): Promise<{ valid: boolean; message: string }> {
+    if (!parsed.origin || !parsed.destination) {
+      return { valid: false, message: 'Origin and destination are required' };
+    }
+
+    // Validate origin station
+    const originResults = this.searchStations(parsed.origin);
+    if (originResults.length === 0) {
+      return {
+        valid: false,
+        message: `Cannot find origin station "${parsed.origin}". Try using full station names like "臺北" or "台中".`
+      };
+    }
+
+    // Validate destination station
+    const destinationResults = this.searchStations(parsed.destination);
+    if (destinationResults.length === 0) {
+      return {
+        valid: false,
+        message: `Cannot find destination station "${parsed.destination}". Try using full station names like "臺北" or "台中".`
+      };
+    }
+
+    // Check confidence of matches
+    const originMatch = originResults[0];
+    const destinationMatch = destinationResults[0];
+
+    if (originMatch.confidence < 0.7 || destinationMatch.confidence < 0.7) {
+      return {
+        valid: false,
+        message: `Station names need clarification:\n` +
+                 `• Origin: "${parsed.origin}" → best match: "${originMatch.name}" (${Math.round(originMatch.confidence * 100)}%)\n` +
+                 `• Destination: "${parsed.destination}" → best match: "${destinationMatch.name}" (${Math.round(destinationMatch.confidence * 100)}%)\n\n` +
+                 `Please use more specific station names.`
+      };
+    }
+
+    return { valid: true, message: 'Stations validated successfully' };
   }
 
   private checkRateLimit(clientId: string): void {
