@@ -9,6 +9,7 @@ import {
 
 class SmartTRAServer {
   private server: Server;
+  private isShuttingDown = false;
 
   constructor() {
     this.server = new Server(
@@ -24,6 +25,7 @@ class SmartTRAServer {
     );
 
     this.setupHandlers();
+    this.setupGracefulShutdown();
   }
 
   private setupHandlers() {
@@ -89,7 +91,25 @@ class SmartTRAServer {
     });
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      // Check if server is shutting down
+      if (this.isShuttingDown) {
+        throw new Error('Server is shutting down');
+      }
+
       const { name, arguments: args } = request.params;
+
+      // Input validation
+      if (!args || typeof args !== 'object') {
+        throw new Error('Invalid arguments: expected object');
+      }
+
+      const query = args.query;
+      if (!query || typeof query !== 'string' || query.trim().length === 0) {
+        throw new Error('Invalid query: must be a non-empty string');
+      }
+
+      // Sanitize query for logging (remove potential control characters)
+      const sanitizedQuery = query.replace(/[\x00-\x1f\x7f-\x9f]/g, '');
 
       switch (name) {
         case 'search_trains':
@@ -97,7 +117,7 @@ class SmartTRAServer {
             content: [
               {
                 type: 'text',
-                text: `Mock response for search_trains: ${args?.query || 'no query provided'}`,
+                text: `Mock response for search_trains: ${sanitizedQuery}`,
               },
             ],
           };
@@ -107,7 +127,7 @@ class SmartTRAServer {
             content: [
               {
                 type: 'text',
-                text: `Mock response for search_station: ${args?.query || 'no query provided'}`,
+                text: `Mock response for search_station: ${sanitizedQuery}`,
               },
             ],
           };
@@ -117,7 +137,7 @@ class SmartTRAServer {
             content: [
               {
                 type: 'text',
-                text: `Mock response for plan_trip: ${args?.query || 'no query provided'}`,
+                text: `Mock response for plan_trip: ${sanitizedQuery}`,
               },
             ],
           };
@@ -128,12 +148,40 @@ class SmartTRAServer {
     });
   }
 
+  private setupGracefulShutdown() {
+    const gracefulShutdown = async (signal: string) => {
+      console.log(`Received ${signal}, starting graceful shutdown...`);
+      this.isShuttingDown = true;
+      
+      // Give ongoing requests time to complete
+      setTimeout(() => {
+        console.log('Graceful shutdown complete');
+        process.exit(0);
+      }, 1000);
+    };
+
+    process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+    process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+  }
+
   async start() {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.error('Smart TRA MCP Server started successfully');
+    console.log('Smart TRA MCP Server started successfully');
+  }
+
+  // Health check method for future use
+  getHealthStatus() {
+    return {
+      status: this.isShuttingDown ? 'shutting_down' : 'healthy',
+      timestamp: new Date().toISOString(),
+      version: '1.0.0'
+    };
   }
 }
+
+// Export the class for testing
+export { SmartTRAServer };
 
 const server = new SmartTRAServer();
 server.start().catch((error) => {
