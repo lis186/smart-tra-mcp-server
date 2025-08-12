@@ -54,11 +54,10 @@ async function main() {
     
     console.log('\n🎉 Stage 3 validation complete! TDX authentication is working.');
     
-    // Save test results for documentation
+    // Save test results for documentation (no sensitive info)
     const testResults = {
       timestamp: new Date().toISOString(),
       success: true,
-      tokenLength: token.length,
       apiResponse: {
         stationCount: Array.isArray(stations) ? stations.length : 0,
         sampleStation: stations[0]?.StationName?.Zh_tw || 'Unknown'

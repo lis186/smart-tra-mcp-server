@@ -45,7 +45,7 @@ export async function getTDXToken(clientId: string, clientSecret: string): Promi
     client_secret: clientSecret
   });
 
-  console.error(`[TDX Auth] Client ID: ${clientId.substring(0, 8)}...`);
+  console.error(`[TDX Auth] Client ID: ${clientId.substring(0, 6)}***`);
   
   // Create AbortController for timeout
   const controller = new AbortController();
@@ -75,7 +75,13 @@ export async function getTDXToken(clientId: string, clientSecret: string): Promi
     const tokenData = await response.json() as TokenResponse;
     console.error(`[TDX Auth] Token acquired successfully, expires in ${tokenData.expires_in} seconds`);
     
-    return tokenData.access_token;
+    // Extract token before clearing response data
+    const accessToken = tokenData.access_token;
+    
+    // Clear sensitive data from memory
+    tokenData.access_token = '';
+    
+    return accessToken;
     
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
@@ -83,7 +89,16 @@ export async function getTDXToken(clientId: string, clientSecret: string): Promi
     }
     throw error;
   } finally {
+    // Clear timeout and ensure cleanup
     clearTimeout(timeoutId);
+    
+    // Clear URLSearchParams body from memory
+    try {
+      body.delete('client_secret');
+      body.delete('client_id');
+    } catch {
+      // Ignore errors during cleanup
+    }
   }
 }
 

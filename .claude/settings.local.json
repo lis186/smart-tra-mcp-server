@@ -16,7 +16,8 @@
       "Bash(npm test)",
       "Bash(git submodule:*)",
       "Bash(grep:*)",
-      "Bash(TDX_CLIENT_ID=test_client_id TDX_CLIENT_SECRET=test_secret npm run test:auth)"
+      "Bash(TDX_CLIENT_ID=test_client_id TDX_CLIENT_SECRET=test_secret npm run test:auth)",
+      "Bash(npm run test:auth:*)"
     ],
     "deny": []
   }
