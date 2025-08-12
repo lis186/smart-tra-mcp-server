@@ -1,0 +1,30 @@
+{
+  "name": "smart-tra-mcp-server",
+  "version": "1.0.0",
+  "description": "Smart TRA MCP Server - Intelligent Taiwan Railway query server",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc && node dist/server.js",
+    "start": "node dist/server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lis186/smart-tra-mcp-server.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/lis186/smart-tra-mcp-server/issues"
+  },
+  "homepage": "https://github.com/lis186/smart-tra-mcp-server#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.2"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.122",
+    "typescript": "^5.9.2"
+  }
+}
