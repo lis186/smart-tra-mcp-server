@@ -12,6 +12,27 @@ import { QueryParser, ParsedQuery } from './query-parser';
 // Load environment variables
 dotenv.config();
 
+// Utility function to check if running in test environment
+function isTestEnvironment(): boolean {
+  return process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID !== undefined;
+}
+
+// Fare calculation configuration
+// Based on TRA official rules: https://www.railway.gov.tw/tra-tip-web/tip
+interface FareRules {
+  child: number;    // 兒童票: 成人票價半數
+  senior: number;   // 敬老愛心票: 成人票價半數
+  disabled: number; // 愛心票: 成人票價半數
+  roundingMethod: 'round' | 'floor' | 'ceil'; // 四捨五入方式
+}
+
+const DEFAULT_FARE_RULES: FareRules = {
+  child: 0.5,     // 50% of adult fare
+  senior: 0.5,    // 50% of adult fare
+  disabled: 0.5,  // 50% of adult fare
+  roundingMethod: 'round' // 四捨五入
+};
+
 // TDX API Types
 interface TokenResponse {
   access_token: string;
@@ -596,17 +617,21 @@ class SmartTRAServer {
       }
     }
 
-    // If we only have adult fare, calculate others based on TRA pricing rules
-    // All reduced fares are 50% of adult fare, rounded to nearest integer
+    // If we only have adult fare, calculate others based on configurable fare rules
+    // Load fare rules from environment or use defaults
+    const fareRules = this.getFareRules();
+    
     if (fareInfo.adult > 0) {
+      const roundFn = this.getRoundingFunction(fareRules.roundingMethod);
+      
       if (fareInfo.child === 0) {
-        fareInfo.child = Math.round(fareInfo.adult * 0.5); // 兒童票: 成人票價半數四捨五入
+        fareInfo.child = roundFn(fareInfo.adult * fareRules.child); // 兒童票: 成人票價 * 配置比例
       }
       if (fareInfo.senior === 0) {
-        fareInfo.senior = Math.round(fareInfo.adult * 0.5); // 敬老愛心票: 成人票價半數四捨五入
+        fareInfo.senior = roundFn(fareInfo.adult * fareRules.senior); // 敬老愛心票: 成人票價 * 配置比例
       }
       if (fareInfo.disabled === 0) {
-        fareInfo.disabled = Math.round(fareInfo.adult * 0.5); // 愛心票: 成人票價半數四捨五入
+        fareInfo.disabled = roundFn(fareInfo.adult * fareRules.disabled); // 愛心票: 成人票價 * 配置比例
       }
     }
 
@@ -720,15 +745,38 @@ class SmartTRAServer {
     return primaryResults;
   }
   
-  // Helper method to parse train departure time to today's date
-  private parseTrainTime(timeString: string): Date {
+  /**
+   * Parse train departure time with explicit date context
+   * @param timeString - Time in HH:MM:SS format
+   * @param referenceDate - Optional reference date for the train schedule
+   * @returns Date object with proper date context
+   */
+  private parseTrainTime(timeString: string, referenceDate?: Date): Date {
     const [hours, minutes, seconds] = timeString.split(':').map(Number);
     const now = new Date();
-    const trainTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, seconds || 0);
+    const refDate = referenceDate || now;
     
-    // If the time has already passed today, assume it's for tomorrow
-    if (trainTime < now) {
-      trainTime.setDate(trainTime.getDate() + 1);
+    // Create train time using reference date
+    const trainTime = new Date(
+      refDate.getFullYear(), 
+      refDate.getMonth(), 
+      refDate.getDate(), 
+      hours, 
+      minutes, 
+      seconds || 0
+    );
+    
+    // Only adjust to next day if:
+    // 1. No explicit reference date was provided AND
+    // 2. The time has already passed today AND
+    // 3. We're dealing with today's schedule (not future dates)
+    if (!referenceDate && trainTime < now) {
+      const hoursDiff = now.getHours() - hours;
+      // If the time difference is significant (>20 hours), likely it's an early morning train tomorrow
+      // Otherwise, it might be a train that just departed
+      if (hoursDiff > 20 || (hoursDiff < 0 && Math.abs(hoursDiff) < 4)) {
+        trainTime.setDate(trainTime.getDate() + 1);
+      }
     }
     
     return trainTime;
@@ -1316,7 +1364,7 @@ class SmartTRAServer {
 
   private setupGracefulShutdown() {
     // Only set up shutdown handlers if not in test environment
-    if (process.env.NODE_ENV !== 'test' && process.env.JEST_WORKER_ID === undefined) {
+    if (!isTestEnvironment()) {
       const gracefulShutdown = async (signal: string) => {
         console.log(`Received ${signal}, starting graceful shutdown...`);
         this.isShuttingDown = true;
@@ -1362,30 +1410,58 @@ class SmartTRAServer {
     };
   }
 
+  /**
+   * Get fare calculation rules from configuration or defaults
+   * Can be overridden via environment variables for different deployments
+   */
+  private getFareRules(): FareRules {
+    return {
+      child: parseFloat(process.env.FARE_CHILD_RATIO || String(DEFAULT_FARE_RULES.child)),
+      senior: parseFloat(process.env.FARE_SENIOR_RATIO || String(DEFAULT_FARE_RULES.senior)),
+      disabled: parseFloat(process.env.FARE_DISABLED_RATIO || String(DEFAULT_FARE_RULES.disabled)),
+      roundingMethod: (process.env.FARE_ROUNDING_METHOD as FareRules['roundingMethod']) || DEFAULT_FARE_RULES.roundingMethod
+    };
+  }
+
+  /**
+   * Get the appropriate rounding function based on configuration
+   */
+  private getRoundingFunction(method: FareRules['roundingMethod']): (n: number) => number {
+    switch (method) {
+      case 'floor':
+        return Math.floor;
+      case 'ceil':
+        return Math.ceil;
+      case 'round':
+      default:
+        return Math.round;
+    }
+  }
+
   // Test helper methods for better test isolation
   resetRateLimitingForTest(): void {
-    if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID !== undefined) {
+    if (isTestEnvironment()) {
       this.requestCount.clear();
       this.lastRequestTime.clear();
     }
   }
 
   setRateLimitForTest(clientId: string, count: number, timestamp?: number): void {
-    if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID !== undefined) {
+    if (isTestEnvironment()) {
       this.requestCount.set(clientId, count);
       this.lastRequestTime.set(clientId, timestamp || Date.now());
     }
   }
 
   getSessionIdForTest(): string {
-    if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID !== undefined) {
+    if (isTestEnvironment()) {
       return this.sessionId;
     }
     throw new Error('Test methods only available in test environment');
   }
 
   checkRateLimitForTest(clientId: string): void {
-    if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID !== undefined) {
+    if (isTestEnvironment()) {
       this.checkRateLimit(clientId);
     } else {
       throw new Error('Test methods only available in test environment');
