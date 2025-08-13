@@ -544,7 +544,15 @@ class SmartTRAServer {
     }
   }
 
-  // Process TDX fare response into structured fare information
+  /**
+   * Process TDX fare response into structured fare information
+   * 
+   * TRA Fare Rules (台鐵票價規則):
+   * - 成人票: 按乘車區間營業里程乘票價率計算
+   * - 兒童票: 未滿12歲，滿115公分未滿150公分，票價按成人票價半數四捨五入
+   * - 敬老愛心票: 年滿65歲或身心障礙者，票價按成人票價半數四捨五入
+   * - 愛心陪伴票: 身心障礙者的必要陪伴者一人享有優惠
+   */
   private processFareData(fareResponse: TDXFareResponse): FareInfo {
     const fareInfo: FareInfo = {
       adult: 0,
@@ -563,17 +571,19 @@ class SmartTRAServer {
         case 'Adult':
           fareInfo.adult = price;
           break;
-        case '孩童票':
-        case '兒童票':
+        case '兒童票':  // Standard term for child ticket
+        case '孩童票':  // Alternative term sometimes used
         case 'Child':
           fareInfo.child = price;
           break;
-        case '敬老票':
-        case '老人票':
+        case '敬老愛心票':  // Standard combined term
+        case '敬老票':  // Senior ticket
+        case '老人票':  // Alternative senior term
         case 'Senior':
           fareInfo.senior = price;
           break;
-        case '愛心票':
+        case '愛心票':  // Disability discount ticket
+        case '愛心陪伴票':  // Companion ticket for disabled
         case '身心障礙票':
         case 'Disabled':
           fareInfo.disabled = price;
@@ -586,16 +596,17 @@ class SmartTRAServer {
       }
     }
 
-    // If we only have adult fare, estimate others based on common TRA pricing
+    // If we only have adult fare, calculate others based on TRA pricing rules
+    // All reduced fares are 50% of adult fare, rounded to nearest integer
     if (fareInfo.adult > 0) {
       if (fareInfo.child === 0) {
-        fareInfo.child = Math.round(fareInfo.adult * 0.5); // Children typically 50%
+        fareInfo.child = Math.round(fareInfo.adult * 0.5); // 兒童票: 成人票價半數四捨五入
       }
       if (fareInfo.senior === 0) {
-        fareInfo.senior = Math.round(fareInfo.adult * 0.5); // Senior typically 50%
+        fareInfo.senior = Math.round(fareInfo.adult * 0.5); // 敬老愛心票: 成人票價半數四捨五入
       }
       if (fareInfo.disabled === 0) {
-        fareInfo.disabled = Math.round(fareInfo.adult * 0.5); // Disabled typically 50%
+        fareInfo.disabled = Math.round(fareInfo.adult * 0.5); // 愛心票: 成人票價半數四捨五入
       }
     }
 
@@ -1139,7 +1150,7 @@ class SmartTRAServer {
         // Add fare summary if available
         if (fareInfo) {
           responseText += `**票價資訊:**\n`;
-          responseText += `• 全票: $${fareInfo.adult} | 孩童票: $${fareInfo.child} | 敬老/愛心票: $${fareInfo.senior}\n\n`;
+          responseText += `• 全票: $${fareInfo.adult} | 兒童票: $${fareInfo.child} | 敬老愛心票: $${fareInfo.senior}\n\n`;
         }
       }
 

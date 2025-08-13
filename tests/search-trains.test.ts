@@ -108,8 +108,8 @@ const mockFareData = [
     Direction: 0,
     Fares: [
       { TicketType: '全票', FareClass: '自由座', Price: 375 },
-      { TicketType: '孩童票', FareClass: '自由座', Price: 188 },
-      { TicketType: '敬老票', FareClass: '自由座', Price: 188 },
+      { TicketType: '兒童票', FareClass: '自由座', Price: 188 },
+      { TicketType: '敬老愛心票', FareClass: '自由座', Price: 188 },
       { TicketType: '愛心票', FareClass: '自由座', Price: 188 }
     ]
   }
@@ -529,7 +529,7 @@ describe('Stage 6: search_trains Tool', () => {
       
       expect(result.content[0].text).toContain('**票價資訊:**');
       expect(result.content[0].text).toContain('全票: $375');
-      expect(result.content[0].text).toContain('孩童票: $188');
+      expect(result.content[0].text).toContain('兒童票: $188');
     });
 
     test('should handle missing fare data gracefully', async () => {
