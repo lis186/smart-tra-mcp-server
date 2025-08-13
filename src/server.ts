@@ -68,6 +68,37 @@ interface TRATrainTimetable {
   StopTimes: TRATrainTimetableStop[];
 }
 
+// TDX API fare response structure
+interface TDXFareResponse {
+  OriginStationID: string;
+  OriginStationName: {
+    Zh_tw: string;
+    En: string;
+  };
+  DestinationStationID: string;
+  DestinationStationName: {
+    Zh_tw: string;
+    En: string;
+  };
+  Direction: number;
+  Fares: TDXFareDetail[];
+}
+
+interface TDXFareDetail {
+  TicketType: string;
+  FareClass: string;
+  CabinClass?: string;
+  Price: number;
+}
+
+interface FareInfo {
+  adult: number;
+  child: number;
+  senior: number;
+  disabled: number;
+  currency: string;
+}
+
 interface TrainSearchResult {
   trainNo: string;
   trainType: string;
@@ -83,6 +114,7 @@ interface TrainSearchResult {
   hasLeft?: boolean;
   lateWarning?: string;
   isBackupOption?: boolean;
+  fareInfo?: FareInfo;
 }
 
 class SmartTRAServer {
@@ -472,6 +504,102 @@ class SmartTRAServer {
     } catch (error) {
       return '未知';
     }
+  }
+
+  // Get fare information between two stations
+  private async getODFare(originStationId: string, destinationStationId: string): Promise<FareInfo | null> {
+    try {
+      const token = await this.getAccessToken();
+      const baseUrl = process.env.TDX_BASE_URL || 'https://tdx.transportdata.tw/api/basic';
+      
+      // Use the OD (Origin-Destination) fare endpoint
+      const endpoint = `/v3/Rail/TRA/ODFare/${originStationId}/to/${destinationStationId}`;
+      
+      const response = await fetch(`${baseUrl}${endpoint}?%24format=JSON`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        console.log(`Fare data not available for route ${originStationId} → ${destinationStationId} (${response.status})`);
+        return null;
+      }
+
+      const fareData = await response.json() as TDXFareResponse[];
+      
+      if (!Array.isArray(fareData) || fareData.length === 0) {
+        console.log(`No fare data found for route ${originStationId} → ${destinationStationId}`);
+        return null;
+      }
+
+      // Process fare data to extract common ticket types
+      const fareInfo = this.processFareData(fareData[0]);
+      console.log(`Retrieved fare data for ${originStationId} → ${destinationStationId}`);
+      return fareInfo;
+    } catch (error) {
+      console.log(`Failed to get fare data for ${originStationId} → ${destinationStationId}:`, error instanceof Error ? error.message : String(error));
+      return null; // Graceful fallback
+    }
+  }
+
+  // Process TDX fare response into structured fare information
+  private processFareData(fareResponse: TDXFareResponse): FareInfo {
+    const fareInfo: FareInfo = {
+      adult: 0,
+      child: 0,
+      senior: 0,
+      disabled: 0,
+      currency: 'TWD'
+    };
+
+    // Map TDX ticket types to our structure
+    for (const fare of fareResponse.Fares) {
+      const price = fare.Price;
+      
+      switch (fare.TicketType) {
+        case '全票':
+        case 'Adult':
+          fareInfo.adult = price;
+          break;
+        case '孩童票':
+        case '兒童票':
+        case 'Child':
+          fareInfo.child = price;
+          break;
+        case '敬老票':
+        case '老人票':
+        case 'Senior':
+          fareInfo.senior = price;
+          break;
+        case '愛心票':
+        case '身心障礙票':
+        case 'Disabled':
+          fareInfo.disabled = price;
+          break;
+        default:
+          // If we don't have adult fare yet, use the first fare as adult
+          if (fareInfo.adult === 0) {
+            fareInfo.adult = price;
+          }
+      }
+    }
+
+    // If we only have adult fare, estimate others based on common TRA pricing
+    if (fareInfo.adult > 0) {
+      if (fareInfo.child === 0) {
+        fareInfo.child = Math.round(fareInfo.adult * 0.5); // Children typically 50%
+      }
+      if (fareInfo.senior === 0) {
+        fareInfo.senior = Math.round(fareInfo.adult * 0.5); // Senior typically 50%
+      }
+      if (fareInfo.disabled === 0) {
+        fareInfo.disabled = Math.round(fareInfo.adult * 0.5); // Disabled typically 50%
+      }
+    }
+
+    return fareInfo;
   }
 
   // Attempt to get live delay data (optional enhancement when available)
@@ -953,7 +1081,15 @@ class SmartTRAServer {
 
       // Process and filter results
       const trainResults = this.processTrainSearchResults(timetableData, originStation.stationId, destinationStation.stationId);
-      const filteredResults = this.filterCommuterTrains(trainResults, parsed.preferences);
+      
+      // Add fare information to train results (runs in parallel with processing)
+      const fareInfo = await this.getODFare(originStation.stationId, destinationStation.stationId);
+      const trainResultsWithFares = trainResults.map(train => ({
+        ...train,
+        fareInfo: fareInfo || undefined
+      }));
+      
+      const filteredResults = this.filterCommuterTrains(trainResultsWithFares, parsed.preferences);
 
       // Format response
       let responseText = `🚄 **Train Search Results**\n\n`;
@@ -976,10 +1112,11 @@ class SmartTRAServer {
             const passIcon = train.isMonthlyPassEligible ? '🎫' : '💰';
             const lateWarning = train.lateWarning ? ` ${train.lateWarning}` : '';
             const timeInfo = train.minutesUntilDeparture ? ` (${train.minutesUntilDeparture}分後)` : '';
+            const fareText = train.fareInfo ? ` | 票價: $${train.fareInfo.adult}` : '';
             
             responseText += `${index + 1}. **${train.trainType} ${train.trainNo}** ${passIcon}${lateWarning}\n`;
             responseText += `   出發: ${train.departureTime}${timeInfo} → 抵達: ${train.arrivalTime}\n`;
-            responseText += `   行程時間: ${train.travelTime} (${train.stops} 個中間站)\n\n`;
+            responseText += `   行程時間: ${train.travelTime} (${train.stops} 個中間站)${fareText}\n\n`;
           });
         }
         
@@ -988,15 +1125,22 @@ class SmartTRAServer {
           backupTrains.forEach((train, index) => {
             const timeInfo = train.minutesUntilDeparture ? ` (${train.minutesUntilDeparture}分後)` : '';
             const lateWarning = train.lateWarning ? ` ${train.lateWarning}` : '';
+            const fareText = train.fareInfo ? ` | 票價: $${train.fareInfo.adult}` : '';
             
             responseText += `${primaryTrains.length + index + 1}. **${train.trainType} ${train.trainNo}** 💰${lateWarning}\n`;
             responseText += `   出發: ${train.departureTime}${timeInfo} → 抵達: ${train.arrivalTime}\n`;
-            responseText += `   行程時間: ${train.travelTime} (${train.stops} 個中間站)\n\n`;
+            responseText += `   行程時間: ${train.travelTime} (${train.stops} 個中間站)${fareText}\n\n`;
           });
         }
 
         responseText += `🎫 = 月票可搭 | 💰 = 需另購票 | ⚠️ = 即將發車\n`;
         responseText += `時間視窗: 接下來2小時 | 可用 "接下來4小時" 擴展搜尋\n\n`;
+        
+        // Add fare summary if available
+        if (fareInfo) {
+          responseText += `**票價資訊:**\n`;
+          responseText += `• 全票: $${fareInfo.adult} | 孩童票: $${fareInfo.child} | 敬老/愛心票: $${fareInfo.senior}\n\n`;
+        }
       }
 
       // Add machine-readable data
@@ -1020,7 +1164,8 @@ class SmartTRAServer {
           isLate: train.isLate,
           hasLeft: train.hasLeft,
           lateWarning: train.lateWarning,
-          isBackupOption: train.isBackupOption
+          isBackupOption: train.isBackupOption,
+          fareInfo: train.fareInfo
         }))
       }, null, 2);
 

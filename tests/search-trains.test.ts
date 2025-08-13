@@ -99,6 +99,22 @@ const mockStationData = [
   }
 ];
 
+const mockFareData = [
+  {
+    OriginStationID: '1000',
+    OriginStationName: { Zh_tw: '臺北', En: 'Taipei' },
+    DestinationStationID: '3300',
+    DestinationStationName: { Zh_tw: '臺中', En: 'Taichung' },
+    Direction: 0,
+    Fares: [
+      { TicketType: '全票', FareClass: '自由座', Price: 375 },
+      { TicketType: '孩童票', FareClass: '自由座', Price: 188 },
+      { TicketType: '敬老票', FareClass: '自由座', Price: 188 },
+      { TicketType: '愛心票', FareClass: '自由座', Price: 188 }
+    ]
+  }
+];
+
 describe('Stage 6: search_trains Tool', () => {
   let server: SmartTRAServer;
 
@@ -477,6 +493,126 @@ describe('Stage 6: search_trains Tool', () => {
       const result = await server['handleSearchTrains']('台北到台中');
       
       expect(result.content[0].text).toContain('❌ Error searching trains');
+    });
+  });
+
+  describe('Fare Integration', () => {
+    beforeEach(() => {
+      (fetch as jest.MockedFunction<typeof fetch>)
+        .mockResolvedValue({
+          ok: true,
+          json: async () => mockTrainData
+        } as Response);
+    });
+
+    test('should fetch fare data successfully', async () => {
+      // Mock fare API response
+      (fetch as jest.MockedFunction<typeof fetch>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockStationData
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockTrainData
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockFareData
+        } as Response);
+
+      const result = await server['handleSearchTrains']('台北到台中');
+      
+      expect(result.content[0].text).toContain('**票價資訊:**');
+      expect(result.content[0].text).toContain('全票: $375');
+      expect(result.content[0].text).toContain('孩童票: $188');
+    });
+
+    test('should handle missing fare data gracefully', async () => {
+      // Mock fare API returning empty data
+      (fetch as jest.MockedFunction<typeof fetch>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockStationData
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockTrainData
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => []
+        } as Response);
+
+      const result = await server['handleSearchTrains']('台北到台中');
+      
+      // Should still work without fare data
+      expect(result.content[0].text).toContain('🚄 **Train Search Results**');
+      expect(result.content[0].text).not.toContain('**票價資訊:**');
+    });
+
+    test('should handle fare API errors gracefully', async () => {
+      // Mock fare API error
+      (fetch as jest.MockedFunction<typeof fetch>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockStationData
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockTrainData
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 404,
+          statusText: 'Not Found'
+        } as Response);
+
+      const result = await server['handleSearchTrains']('台北到台中');
+      
+      // Should still work without fare data
+      expect(result.content[0].text).toContain('🚄 **Train Search Results**');
+      expect(result.content[0].text).not.toContain('**票價資訊:**');
+    });
+
+    test('should include fare info in machine-readable data', async () => {
+      // Mock fare API response
+      (fetch as jest.MockedFunction<typeof fetch>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockStationData
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockTrainData
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockFareData
+        } as Response);
+
+      const result = await server['handleSearchTrains']('台北到台中');
+      
+      expect(result.content[0].text).toContain('Machine-readable data:');
+      expect(result.content[0].text).toContain('"fareInfo"');
+      expect(result.content[0].text).toContain('"adult": 375');
+      expect(result.content[0].text).toContain('"child": 188');
     });
   });
 
