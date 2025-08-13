@@ -7,7 +7,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import * as dotenv from 'dotenv';
-import { QueryParser, ParsedQuery } from './query-parser.js';
+import { QueryParser, ParsedQuery } from './query-parser';
 
 // Load environment variables
 dotenv.config();
