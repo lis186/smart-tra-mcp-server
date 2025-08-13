@@ -23,42 +23,81 @@ export interface ParsedQuery {
 }
 
 export class QueryParser {
+  // Confidence scoring weights
+  private readonly CONFIDENCE_WEIGHTS = {
+    LOCATION_PAIR: 0.4,      // Base confidence for finding origin/destination
+    TIME_MATCH: 0.2,          // Additional confidence for time information
+    DATE_MATCH: 0.2,          // Additional confidence for date information
+    PREFERENCES: 0.1,         // Additional confidence for preferences
+    COMPLETE_BONUS: 0.1       // Bonus for having complete information
+  };
+
+  // Validation thresholds
+  private readonly VALIDATION_THRESHOLDS = {
+    MIN_CONFIDENCE: 0.4,      // Minimum confidence for valid train search
+    HIGH_CONFIDENCE: 0.7,     // Threshold for high confidence results
+    STATION_MATCH: 0.7        // Minimum confidence for station name matching
+  };
+
   private readonly LOCATION_SEPARATORS = [
     '到', '去', '往', '至', '→', '->', '→', '前往'
   ];
 
-  private readonly TIME_PATTERNS = [
-    // Time patterns (8點, 8:30, 20:00, etc.)
-    /(\d{1,2})[：:點](\d{2})?/g,
-    /(\d{1,2})[：:](\d{2})/g,
-    // 12-hour format with 上午/下午
-    /(上午|下午|早上|晚上|中午|凌晨)(\d{1,2})[：:點]?(\d{2})?/g,
-    // Relative times
-    /(早上|上午|中午|下午|晚上|夜晚|深夜|凌晨)/g
-  ];
-
-  private readonly DATE_PATTERNS = [
-    // Relative dates
-    /(今天|明天|後天|昨天|今日|明日)/g,
-    /(這週|下週|上週|本週)(一|二|三|四|五|六|日|天)/g,
-    /(週一|週二|週三|週四|週五|週六|週日|周一|周二|周三|周四|周五|周六|周日)/g,
-    // Specific dates (月/日 format)
-    /(\d{1,2})月(\d{1,2})[日號]/g,
-    /(\d{4})[年\/\-](\d{1,2})[月\/\-](\d{1,2})[日號]?/g
-  ];
-
-  private readonly PREFERENCE_PATTERNS = [
-    { pattern: /(最快|快速|急行|特急|自強)/g, preference: 'fastest' },
-    { pattern: /(最便宜|便宜|省錢|經濟)/g, preference: 'cheapest' },
-    { pattern: /(直達|不換車|不轉車)/g, preference: 'directOnly' },
-    { pattern: /(自強|莒光|復興|區間|區間快)/g, preference: 'trainType' }
-  ];
+  // Pre-compiled regex patterns for better performance
+  private readonly COMPILED_PATTERNS = {
+    // Time extraction patterns
+    TIME_SPECIFIC: /(\d{1,2})[：:點](\d{2})?/,
+    TIME_12HOUR: /(上午|下午|早上|晚上|中午|凌晨)(\d{1,2})[：:點]?(\d{2})?/,
+    TIME_PERIOD: /(早上|上午|中午|下午|晚上|夜晚|深夜|凌晨)/,
+    
+    // Date extraction patterns
+    DATE_RELATIVE: /(今天|明天|後天|昨天|今日|明日)/,
+    DATE_WEEKDAY: /(週一|週二|週三|週四|週五|週六|週日|周一|周二|周三|周四|周五|周六|周日)/,
+    DATE_WEEK_PREFIX: /(這週|下週|上週|本週)(一|二|三|四|五|六|日|天)/,
+    DATE_SPECIFIC: /(\d{1,2})月(\d{1,2})[日號]/,
+    DATE_FULL: /(\d{4})[年\/\-](\d{1,2})[月\/\-](\d{1,2})[日號]?/,
+    
+    // Location patterns
+    LOCATION_FROM_TO: /從(.+?)[到去往至](.+)/,
+    LOCATION_VIA_TO: /由(.+?)[到去往至](.+)/,
+    
+    // Station name patterns
+    STATION_MAJOR: /(?:[台臺]北|[台臺]中|[台臺]南|高雄|桃園|新竹|基隆|嘉義|花蓮|台東|宜蘭)/g,
+    STATION_COMMON: /(?:板橋|中壢|竹南|苗栗|豐原|彰化|員林|斗六|虎尾|新營|永康|岡山|屏東)/g,
+    STATION_GENERIC: /[\u4e00-\u9fff]{2,4}/g,
+    
+    // Preference patterns
+    PREF_FASTEST: /(最快|快速|急行|特急|自強)/,
+    PREF_CHEAPEST: /(最便宜|便宜|省錢|經濟)/,
+    PREF_DIRECT: /(直達|不換車|不轉車)/,
+    PREF_TRAIN_TYPE: /(自強|莒光|復興|區間快|區間)/
+  };
 
   /**
    * Parse natural language query into structured components
    */
   parse(query: string): ParsedQuery {
-    const normalizedQuery = query.trim();
+    // Input validation and sanitization
+    if (!query || typeof query !== 'string') {
+      return {
+        confidence: 0,
+        rawQuery: '',
+        matchedPatterns: []
+      };
+    }
+
+    // Remove potentially problematic characters while preserving Chinese
+    const sanitized = query
+      .replace(/[\x00-\x1f\x7f-\x9f]/g, '') // Remove control characters
+      .replace(/\s+/g, ' ') // Normalize whitespace
+      .trim();
+
+    // Limit query length to prevent DoS
+    const MAX_QUERY_LENGTH = 500;
+    const normalizedQuery = sanitized.length > MAX_QUERY_LENGTH 
+      ? sanitized.substring(0, MAX_QUERY_LENGTH) 
+      : sanitized;
+
     const matchedPatterns: string[] = [];
     let confidence = 0;
 
@@ -74,7 +113,7 @@ export class QueryParser {
     if (locationMatch) {
       result.origin = locationMatch.origin;
       result.destination = locationMatch.destination;
-      confidence += 0.4; // High confidence for location pairs
+      confidence += this.CONFIDENCE_WEIGHTS.LOCATION_PAIR;
       matchedPatterns.push('location_pair');
     }
 
@@ -82,7 +121,7 @@ export class QueryParser {
     const timeMatch = this.extractTime(normalizedQuery);
     if (timeMatch.time) {
       result.time = timeMatch.time;
-      confidence += 0.2;
+      confidence += this.CONFIDENCE_WEIGHTS.TIME_MATCH;
       matchedPatterns.push('time');
     }
 
@@ -90,7 +129,7 @@ export class QueryParser {
     const dateMatch = this.extractDate(normalizedQuery);
     if (dateMatch.date) {
       result.date = dateMatch.date;
-      confidence += 0.2;
+      confidence += this.CONFIDENCE_WEIGHTS.DATE_MATCH;
       matchedPatterns.push('date');
     }
 
@@ -98,13 +137,13 @@ export class QueryParser {
     const preferencesMatch = this.extractPreferences(normalizedQuery);
     if (preferencesMatch.hasPreferences) {
       result.preferences = preferencesMatch.preferences;
-      confidence += 0.1;
+      confidence += this.CONFIDENCE_WEIGHTS.PREFERENCES;
       matchedPatterns.push('preferences');
     }
 
     // 5. Boost confidence for common complete patterns
     if (result.origin && result.destination && (result.time || result.date)) {
-      confidence += 0.1; // Bonus for complete information
+      confidence += this.CONFIDENCE_WEIGHTS.COMPLETE_BONUS;
       matchedPatterns.push('complete_query');
     }
 
@@ -137,12 +176,12 @@ export class QueryParser {
     }
 
     // Method 2: Try regex patterns for "從A到B" structure
-    const reversePatterns = [
-      /從(.+?)[到去往至](.+)/,
-      /由(.+?)[到去往至](.+)/
+    const patterns = [
+      this.COMPILED_PATTERNS.LOCATION_FROM_TO,
+      this.COMPILED_PATTERNS.LOCATION_VIA_TO
     ];
 
-    for (const pattern of reversePatterns) {
+    for (const pattern of patterns) {
       const match = query.match(pattern);
       if (match) {
         const origin = this.cleanLocationName(match[1]);
@@ -162,14 +201,11 @@ export class QueryParser {
    * @param position Whether to extract from 'start' or 'end' of the segment
    */
   private extractStationName(text: string, position: 'start' | 'end'): string {
-    // Common station names and patterns
+    // Use pre-compiled station patterns
     const stationPatterns = [
-      // Major cities/stations (2-3 characters) - use word boundaries
-      /(?:[台臺]北|[台臺]中|[台臺]南|高雄|桃園|新竹|基隆|嘉義|花蓮|台東|宜蘭)/g,
-      // Other common stations
-      /(?:板橋|中壢|竹南|苗栗|豐原|彰化|員林|斗六|虎尾|新營|永康|岡山|屏東)/g,
-      // Pattern for other Chinese station names (2-4 characters)
-      /[\u4e00-\u9fff]{2,4}/g
+      this.COMPILED_PATTERNS.STATION_MAJOR,
+      this.COMPILED_PATTERNS.STATION_COMMON,
+      this.COMPILED_PATTERNS.STATION_GENERIC
     ];
 
     let cleanedText = text.trim();
@@ -220,8 +256,7 @@ export class QueryParser {
    */
   private extractTime(query: string): { time: string } {
     // Check for specific times first (8:30, 14:00, etc.)
-    const timeRegex = /(\d{1,2})[：:點](\d{2})?/;
-    const timeMatch = query.match(timeRegex);
+    const timeMatch = query.match(this.COMPILED_PATTERNS.TIME_SPECIFIC);
     if (timeMatch) {
       const hours = timeMatch[1];
       const minutes = timeMatch[2] || '00';
@@ -229,8 +264,7 @@ export class QueryParser {
     }
 
     // Check for 12-hour format with period indicators
-    const periodRegex = /(上午|下午|早上|晚上|中午|凌晨)(\d{1,2})[：:點]?(\d{2})?/;
-    const periodMatch = query.match(periodRegex);
+    const periodMatch = query.match(this.COMPILED_PATTERNS.TIME_12HOUR);
     if (periodMatch) {
       const period = periodMatch[1];
       let hours = parseInt(periodMatch[2]);
@@ -270,10 +304,30 @@ export class QueryParser {
   }
 
   /**
+   * Get current date in Taipei timezone
+   */
+  private getTaipeiDate(): Date {
+    // Create date in Taipei timezone (UTC+8)
+    const now = new Date();
+    const taipeiTime = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Taipei" }));
+    return taipeiTime;
+  }
+
+  /**
+   * Format date to YYYY-MM-DD in Taipei timezone
+   */
+  private formatDateToTaipei(date: Date): string {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  /**
    * Extract date information from query
    */
   private extractDate(query: string): { date: string } {
-    const today = new Date();
+    const today = this.getTaipeiDate();
     
     // Handle relative dates
     const relativeDateMap = new Map([
@@ -289,7 +343,7 @@ export class QueryParser {
       if (query.includes(relative)) {
         const targetDate = new Date(today);
         targetDate.setDate(today.getDate() + dayOffset);
-        return { date: targetDate.toISOString().split('T')[0] };
+        return { date: this.formatDateToTaipei(targetDate) };
       }
     }
 
@@ -313,7 +367,7 @@ export class QueryParser {
         
         const targetDate = new Date(today);
         targetDate.setDate(today.getDate() + daysToAdd);
-        return { date: targetDate.toISOString().split('T')[0] };
+        return { date: this.formatDateToTaipei(targetDate) };
       }
     }
 
@@ -324,9 +378,16 @@ export class QueryParser {
       const month = parseInt(specificMatch[1]);
       const day = parseInt(specificMatch[2]);
       const currentYear = today.getFullYear();
+      const currentMonth = today.getMonth() + 1;
       
-      const targetDate = new Date(currentYear, month - 1, day);
-      return { date: targetDate.toISOString().split('T')[0] };
+      // Handle year boundary: if the specified month has passed, assume next year
+      let targetYear = currentYear;
+      if (month < currentMonth || (month === currentMonth && day < today.getDate())) {
+        targetYear = currentYear + 1;
+      }
+      
+      const targetDate = new Date(targetYear, month - 1, day);
+      return { date: this.formatDateToTaipei(targetDate) };
     }
 
     return { date: '' };
@@ -339,32 +400,38 @@ export class QueryParser {
     const preferences: ParsedQuery['preferences'] = {};
     let hasPreferences = false;
 
-    // Check each preference pattern
-    for (const { pattern, preference } of this.PREFERENCE_PATTERNS) {
-      const matches = query.match(pattern);
-      if (matches) {
-        hasPreferences = true;
-        
-        switch (preference) {
-          case 'fastest':
-            preferences.fastest = true;
-            break;
-          case 'cheapest':
-            preferences.cheapest = true;
-            break;
-          case 'directOnly':
-            preferences.directOnly = true;
-            break;
-          case 'trainType':
-            // Extract specific train type
-            if (matches[0].includes('自強')) preferences.trainType = '自強';
-            else if (matches[0].includes('莒光')) preferences.trainType = '莒光';
-            else if (matches[0].includes('復興')) preferences.trainType = '復興';
-            else if (matches[0].includes('區間快')) preferences.trainType = '區間快';
-            else if (matches[0].includes('區間')) preferences.trainType = '區間';
-            break;
-        }
+    // Check for speed preferences (mutually exclusive)
+    if (this.COMPILED_PATTERNS.PREF_FASTEST.test(query)) {
+      preferences.fastest = true;
+      hasPreferences = true;
+    } else if (this.COMPILED_PATTERNS.PREF_CHEAPEST.test(query)) {
+      preferences.cheapest = true;
+      hasPreferences = true;
+    }
+
+    // Check for direct train preference
+    if (this.COMPILED_PATTERNS.PREF_DIRECT.test(query)) {
+      preferences.directOnly = true;
+      hasPreferences = true;
+    }
+
+    // Extract specific train type (handle multiple mentions)
+    const trainTypeMatch = query.match(this.COMPILED_PATTERNS.PREF_TRAIN_TYPE);
+    if (trainTypeMatch) {
+      // Priority order for multiple train types: 自強 > 莒光 > 復興 > 區間快 > 區間
+      if (query.includes('自強')) {
+        preferences.trainType = '自強';
+        preferences.fastest = true; // 自強 is fastest
+      } else if (query.includes('莒光')) {
+        preferences.trainType = '莒光';
+      } else if (query.includes('復興')) {
+        preferences.trainType = '復興';
+      } else if (query.includes('區間快')) {
+        preferences.trainType = '區間快';
+      } else if (query.includes('區間')) {
+        preferences.trainType = '區間';
       }
+      hasPreferences = true;
     }
 
     return { preferences, hasPreferences };
@@ -410,6 +477,6 @@ export class QueryParser {
    * Validate if parsed query has minimum required information
    */
   isValidForTrainSearch(parsed: ParsedQuery): boolean {
-    return !!(parsed.origin && parsed.destination && parsed.confidence >= 0.4);
+    return !!(parsed.origin && parsed.destination && parsed.confidence >= this.VALIDATION_THRESHOLDS.MIN_CONFIDENCE);
   }
 }
