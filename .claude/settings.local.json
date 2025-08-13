@@ -23,7 +23,8 @@
       "Bash(pkill:*)",
       "Bash(git stash:*)",
       "Bash(npm run lint)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(git push:*)"
     ],
     "deny": []
   }

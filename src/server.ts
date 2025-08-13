@@ -78,6 +78,11 @@ interface TrainSearchResult {
   travelTime: string;
   isMonthlyPassEligible: boolean;
   stops: number;
+  minutesUntilDeparture?: number;
+  isLate?: boolean;
+  hasLeft?: boolean;
+  lateWarning?: string;
+  isBackupOption?: boolean;
 }
 
 class SmartTRAServer {
@@ -462,16 +467,83 @@ class SmartTRAServer {
       filtered = filtered.filter(train => train.isMonthlyPassEligible);
     }
     
-    // Sort by departure time
+    // Apply time window filtering (next 2 hours by default for commuters)
+    const now = new Date();
+    const timeWindowHours = preferences?.timeWindowHours || 2;
+    const maxTime = new Date(now.getTime() + timeWindowHours * 60 * 60 * 1000);
+    
+    filtered = filtered.filter(train => {
+      const trainTime = this.parseTrainTime(train.departureTime);
+      return trainTime >= now && trainTime <= maxTime;
+    });
+    
+    // Add late indicators and status
+    filtered = filtered.map(train => {
+      const trainTime = this.parseTrainTime(train.departureTime);
+      const minutesUntilDeparture = Math.round((trainTime.getTime() - now.getTime()) / (1000 * 60));
+      
+      // Add late warning if departure is very soon
+      const isLate = minutesUntilDeparture <= 15 && minutesUntilDeparture > 0;
+      const hasLeft = minutesUntilDeparture <= 0;
+      
+      return {
+        ...train,
+        minutesUntilDeparture,
+        isLate,
+        hasLeft,
+        lateWarning: isLate ? '⚠️ 即將發車' : hasLeft ? '❌ 已發車' : undefined
+      };
+    });
+    
+    // Sort by departure time (upcoming first)
     filtered.sort((a, b) => {
       const timeA = a.departureTime.replace(':', '');
       const timeB = b.departureTime.replace(':', '');
       return timeA.localeCompare(timeB);
     });
     
-    // Limit results (default 10)
-    const limit = preferences?.maxResults || 10;
-    return filtered.slice(0, limit);
+    // Include backup options - if we have fewer than 3 trains, include some non-monthly-pass trains
+    const primaryResults = filtered.slice(0, preferences?.maxResults || 3);
+    
+    if (primaryResults.length < 3 && !preferences?.includeAllTrainTypes) {
+      const allTrains = trains.map(train => {
+        const trainTime = this.parseTrainTime(train.departureTime);
+        const minutesUntilDeparture = Math.round((trainTime.getTime() - now.getTime()) / (1000 * 60));
+        const isLate = minutesUntilDeparture <= 15 && minutesUntilDeparture > 0;
+        const hasLeft = minutesUntilDeparture <= 0;
+        
+        return {
+          ...train,
+          minutesUntilDeparture,
+          isLate,
+          hasLeft,
+          lateWarning: isLate ? '⚠️ 即將發車' : hasLeft ? '❌ 已發車' : undefined,
+          isBackupOption: !train.isMonthlyPassEligible
+        };
+      });
+      
+      const backupTrains = allTrains
+        .filter(train => !train.isMonthlyPassEligible && train.minutesUntilDeparture > 0)
+        .slice(0, 3 - primaryResults.length);
+      
+      return [...primaryResults, ...backupTrains];
+    }
+    
+    return primaryResults;
+  }
+  
+  // Helper method to parse train departure time to today's date
+  private parseTrainTime(timeString: string): Date {
+    const [hours, minutes, seconds] = timeString.split(':').map(Number);
+    const now = new Date();
+    const trainTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, seconds || 0);
+    
+    // If the time has already passed today, assume it's for tomorrow
+    if (trainTime < now) {
+      trainTime.setDate(trainTime.getDate() + 1);
+    }
+    
+    return trainTime;
   }
 
   // Load station data from TDX API with failure state tracking
@@ -835,18 +907,41 @@ class SmartTRAServer {
       responseText += `**Found:** ${filteredResults.length} trains (${timetableData.length} total)\n\n`;
 
       if (filteredResults.length === 0) {
-        responseText += `❌ No monthly pass eligible trains found.\n\n`;
+        responseText += `❌ No trains found in the next 2 hours.\n\n`;
         responseText += `Monthly pass is valid for: 區間車, 區間快車\n`;
-        responseText += `Try adding "所有車種" to see all train types.`;
+        responseText += `Try:\n• Extending time window with "接下來4小時"\n• Including all train types with "所有車種"`;
       } else {
-        filteredResults.forEach((train, index) => {
-          const passIcon = train.isMonthlyPassEligible ? '🎫' : '💰';
-          responseText += `${index + 1}. **${train.trainType} ${train.trainNo}** ${passIcon}\n`;
-          responseText += `   出發: ${train.departureTime} → 抵達: ${train.arrivalTime}\n`;
-          responseText += `   行程時間: ${train.travelTime} (${train.stops} 個中間站)\n\n`;
-        });
+        // Separate primary and backup options
+        const primaryTrains = filteredResults.filter(train => !train.isBackupOption);
+        const backupTrains = filteredResults.filter(train => train.isBackupOption);
+        
+        if (primaryTrains.length > 0) {
+          responseText += `**月票可搭 (接下來2小時):**\n\n`;
+          primaryTrains.forEach((train, index) => {
+            const passIcon = train.isMonthlyPassEligible ? '🎫' : '💰';
+            const lateWarning = train.lateWarning ? ` ${train.lateWarning}` : '';
+            const timeInfo = train.minutesUntilDeparture ? ` (${train.minutesUntilDeparture}分後)` : '';
+            
+            responseText += `${index + 1}. **${train.trainType} ${train.trainNo}** ${passIcon}${lateWarning}\n`;
+            responseText += `   出發: ${train.departureTime}${timeInfo} → 抵達: ${train.arrivalTime}\n`;
+            responseText += `   行程時間: ${train.travelTime} (${train.stops} 個中間站)\n\n`;
+          });
+        }
+        
+        if (backupTrains.length > 0) {
+          responseText += `**備選車次 (需另購票):**\n\n`;
+          backupTrains.forEach((train, index) => {
+            const timeInfo = train.minutesUntilDeparture ? ` (${train.minutesUntilDeparture}分後)` : '';
+            const lateWarning = train.lateWarning ? ` ${train.lateWarning}` : '';
+            
+            responseText += `${primaryTrains.length + index + 1}. **${train.trainType} ${train.trainNo}** 💰${lateWarning}\n`;
+            responseText += `   出發: ${train.departureTime}${timeInfo} → 抵達: ${train.arrivalTime}\n`;
+            responseText += `   行程時間: ${train.travelTime} (${train.stops} 個中間站)\n\n`;
+          });
+        }
 
-        responseText += `🎫 = 月票可搭 | 💰 = 需另購票\n\n`;
+        responseText += `🎫 = 月票可搭 | 💰 = 需另購票 | ⚠️ = 即將發車\n`;
+        responseText += `時間視窗: 接下來2小時 | 可用 "接下來4小時" 擴展搜尋\n\n`;
       }
 
       // Add machine-readable data
@@ -865,7 +960,12 @@ class SmartTRAServer {
           arrival: train.arrivalTime,
           travelTime: train.travelTime,
           monthlyPassEligible: train.isMonthlyPassEligible,
-          stops: train.stops
+          stops: train.stops,
+          minutesUntilDeparture: train.minutesUntilDeparture,
+          isLate: train.isLate,
+          hasLeft: train.hasLeft,
+          lateWarning: train.lateWarning,
+          isBackupOption: train.isBackupOption
         }))
       }, null, 2);
 
