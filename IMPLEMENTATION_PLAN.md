@@ -337,11 +337,14 @@
 - ✅ Monthly pass filtering (區間車, 區間快車) with commuter defaults
 - ✅ Comprehensive train data processing (travel time, stops, schedules)
 - ✅ Real-time timetable data from TDX production API
+- ✅ **Fare/Pricing Integration** (TDX OD Fare API with all ticket types)
+- ✅ **Enhanced Response Format** (pricing display in train listings)
+- ✅ **Data Availability Handling** (graceful degradation when trains not running)
 - ✅ Robust error handling for API failures and invalid routes
-- ✅ Machine-readable JSON output for downstream integration
+- ✅ Machine-readable JSON output with fare information
 - ✅ MCP tool fully functional with natural language queries
 
-**Key Decision Point**: ✅ search_station + search_trains both working - have viable MVP ready for deployment
+**Key Decision Point**: ✅ search_station + search_trains both working with complete fare integration - MVP ready for deployment
 
 ---
 
