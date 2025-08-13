@@ -21,7 +21,8 @@
       "Bash(gh pr view:*)",
       "Bash(npm test:*)",
       "Bash(pkill:*)",
-      "Bash(git stash:*)"
+      "Bash(git stash:*)",
+      "Bash(npm run lint)"
     ],
     "deny": []
   }

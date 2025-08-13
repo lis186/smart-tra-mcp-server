@@ -39,6 +39,47 @@ interface StationSearchResult {
   coordinates?: { lat: number; lon: number };
 }
 
+interface TRATrainTimetableStop {
+  StationID: string;
+  StationName: { Zh_tw: string; En: string };
+  ArrivalTime: string;
+  DepartureTime: string;
+  StopTime: number;
+}
+
+interface TRATrainTimetable {
+  TrainNo: string;
+  RouteID: string;
+  Direction: number;
+  TrainClassificationID: string;
+  TrainTypeID: string;
+  TrainTypeName: { Zh_tw: string; En: string };
+  StartingStationID: string;
+  StartingStationName: { Zh_tw: string; En: string };
+  EndingStationID: string;
+  EndingStationName: { Zh_tw: string; En: string };
+  TripLine: number;
+  WheelChairFlag: number;
+  PackageServiceFlag: number;
+  DiningFlag: number;
+  BreastFeedFlag: number;
+  BikeFlag: number;
+  TrainDate: string;
+  StopTimes: TRATrainTimetableStop[];
+}
+
+interface TrainSearchResult {
+  trainNo: string;
+  trainType: string;
+  origin: string;
+  destination: string;
+  departureTime: string;
+  arrivalTime: string;
+  travelTime: string;
+  isMonthlyPassEligible: boolean;
+  stops: number;
+}
+
 class SmartTRAServer {
   private server: Server;
   private isShuttingDown = false;
@@ -310,6 +351,127 @@ class SmartTRAServer {
     
     console.log('TDX access token obtained successfully');
     return tokenData.access_token;
+  }
+
+  // Call TDX Daily Train Timetable API
+  private async getDailyTrainTimetable(originStationId: string, destinationStationId: string, trainDate?: string): Promise<TRATrainTimetable[]> {
+    try {
+      const token = await this.getAccessToken();
+      const baseUrl = process.env.TDX_BASE_URL || 'https://tdx.transportdata.tw/api/basic';
+      
+      // Use today if no date specified
+      const date = trainDate || new Date().toISOString().split('T')[0];
+      
+      // Use the OD (Origin-Destination) endpoint for efficient filtering
+      const endpoint = `/v2/Rail/TRA/DailyTrainTimetable/OD/${originStationId}/to/${destinationStationId}/${date}`;
+      
+      const response = await fetch(`${baseUrl}${endpoint}?%24format=JSON`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch train timetable: ${response.status} ${response.statusText}`);
+      }
+
+      const data = await response.json() as TRATrainTimetable[];
+      console.log(`Retrieved ${data.length} trains for ${originStationId} → ${destinationStationId} on ${date}`);
+      return data;
+    } catch (error) {
+      console.error('Error fetching train timetable:', error);
+      throw error;
+    }
+  }
+
+  // Process train timetable data for search results
+  private processTrainSearchResults(trains: TRATrainTimetable[], originStationId: string, destinationStationId: string): TrainSearchResult[] {
+    const results: TrainSearchResult[] = [];
+    
+    for (const train of trains) {
+      // Find origin and destination stops
+      const originStop = train.StopTimes.find(stop => stop.StationID === originStationId);
+      const destinationStop = train.StopTimes.find(stop => stop.StationID === destinationStationId);
+      
+      if (!originStop || !destinationStop) {
+        continue; // Skip trains that don't stop at both stations
+      }
+      
+      // Calculate travel time
+      const departureTime = originStop.DepartureTime || originStop.ArrivalTime;
+      const arrivalTime = destinationStop.ArrivalTime || destinationStop.DepartureTime;
+      const travelTime = this.calculateTravelTime(departureTime, arrivalTime);
+      
+      // Count intermediate stops
+      const originIndex = train.StopTimes.findIndex(stop => stop.StationID === originStationId);
+      const destinationIndex = train.StopTimes.findIndex(stop => stop.StationID === destinationStationId);
+      const stops = Math.abs(destinationIndex - originIndex) - 1; // Exclude origin and destination
+      
+      // Check if eligible for monthly pass (區間車, 區間快車)
+      const monthlyPassTrainTypes = ['10', '11']; // 區間車 (10), 區間快車 (11)
+      const isMonthlyPassEligible = monthlyPassTrainTypes.includes(train.TrainTypeID);
+      
+      results.push({
+        trainNo: train.TrainNo,
+        trainType: train.TrainTypeName.Zh_tw,
+        origin: originStop.StationName.Zh_tw,
+        destination: destinationStop.StationName.Zh_tw,
+        departureTime,
+        arrivalTime,
+        travelTime,
+        isMonthlyPassEligible,
+        stops
+      });
+    }
+    
+    return results;
+  }
+
+  // Calculate travel time between two time strings
+  private calculateTravelTime(departureTime: string, arrivalTime: string): string {
+    try {
+      const departure = new Date(`1970-01-01T${departureTime}`);
+      const arrival = new Date(`1970-01-01T${arrivalTime}`);
+      
+      // Handle next-day arrivals
+      if (arrival < departure) {
+        arrival.setDate(arrival.getDate() + 1);
+      }
+      
+      const diffMs = arrival.getTime() - departure.getTime();
+      const hours = Math.floor(diffMs / (1000 * 60 * 60));
+      const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+      
+      if (hours === 0) {
+        return `${minutes}分`;
+      } else {
+        return `${hours}小時${minutes}分`;
+      }
+    } catch (error) {
+      return '未知';
+    }
+  }
+
+  // Filter trains based on commuter preferences
+  private filterCommuterTrains(trains: TrainSearchResult[], preferences?: any): TrainSearchResult[] {
+    let filtered = [...trains];
+    
+    // Default: Filter to monthly pass eligible trains only
+    if (!preferences?.includeAllTrainTypes) {
+      filtered = filtered.filter(train => train.isMonthlyPassEligible);
+    }
+    
+    // Sort by departure time
+    filtered.sort((a, b) => {
+      const timeA = a.departureTime.replace(':', '');
+      const timeB = b.departureTime.replace(':', '');
+      return timeA.localeCompare(timeB);
+    });
+    
+    // Limit results (default 10)
+    const limit = preferences?.maxResults || 10;
+    return filtered.slice(0, limit);
   }
 
   // Load station data from TDX API with failure state tracking
@@ -598,57 +760,115 @@ class SmartTRAServer {
         };
       }
 
-      // Validate stations using search_station functionality
-      const stationValidation = await this.validateStations(parsed);
-      if (!stationValidation.valid) {
+      // Ensure station data is loaded
+      if (!this.stationDataLoaded) {
+        await this.loadStationData();
+      }
+
+      if (!this.stationDataLoaded) {
         return {
           content: [{
             type: 'text',
-            text: `❌ Station validation failed:\n\n${stationValidation.message}\n\n` +
+            text: '⚠️ Station data is not available. Please check TDX credentials and network connection.'
+          }]
+        };
+      }
+
+      // Validate and get station IDs
+      if (!parsed.origin || !parsed.destination) {
+        return {
+          content: [{
+            type: 'text',
+            text: `❌ Missing origin or destination station.\n\n` +
                   `**What I understood:**\n${this.queryParser.getSummary(parsed)}`
           }]
         };
       }
 
-      // Format response with parsed information and next steps
-      let responseText = `🚄 **Train Search Query Parsed Successfully**\n\n`;
-      responseText += `**Journey:** ${parsed.origin} → ${parsed.destination}\n`;
-      
-      if (parsed.date) {
-        responseText += `**Date:** ${parsed.date}\n`;
+      const originResults = this.searchStations(parsed.origin);
+      const destinationResults = this.searchStations(parsed.destination);
+
+      if (originResults.length === 0 || destinationResults.length === 0) {
+        return {
+          content: [{
+            type: 'text',
+            text: `❌ Station validation failed:\n\n` +
+                  `Could not find ${originResults.length === 0 ? 'origin' : 'destination'} station.\n\n` +
+                  `**What I understood:**\n${this.queryParser.getSummary(parsed)}`
+          }]
+        };
       }
-      if (parsed.time) {
-        responseText += `**Time:** ${parsed.time}\n`;
+
+      const originStation = originResults[0];
+      const destinationStation = destinationResults[0];
+
+      // Get train timetable from TDX API
+      const timetableData = await this.getDailyTrainTimetable(
+        originStation.stationId,
+        destinationStation.stationId,
+        parsed.date
+      );
+
+      if (timetableData.length === 0) {
+        return {
+          content: [{
+            type: 'text',
+            text: `❌ No trains found for this route.\n\n` +
+                  `**Route:** ${originStation.name} → ${destinationStation.name}\n` +
+                  `**Date:** ${parsed.date || 'Today'}\n\n` +
+                  `This might happen if:\n` +
+                  `• The route requires transfers (try nearby major stations)\n` +
+                  `• The date is too far in the future\n` +
+                  `• There are no direct trains on this route`
+          }]
+        };
       }
-      if (parsed.preferences?.trainType) {
-        responseText += `**Train Type:** ${parsed.preferences.trainType}\n`;
+
+      // Process and filter results
+      const trainResults = this.processTrainSearchResults(timetableData, originStation.stationId, destinationStation.stationId);
+      const filteredResults = this.filterCommuterTrains(trainResults, parsed.preferences);
+
+      // Format response
+      let responseText = `🚄 **Train Search Results**\n\n`;
+      responseText += `**Route:** ${originStation.name} → ${destinationStation.name}\n`;
+      responseText += `**Date:** ${parsed.date || 'Today'}\n`;
+      responseText += `**Found:** ${filteredResults.length} trains (${timetableData.length} total)\n\n`;
+
+      if (filteredResults.length === 0) {
+        responseText += `❌ No monthly pass eligible trains found.\n\n`;
+        responseText += `Monthly pass is valid for: 區間車, 區間快車\n`;
+        responseText += `Try adding "所有車種" to see all train types.`;
+      } else {
+        filteredResults.forEach((train, index) => {
+          const passIcon = train.isMonthlyPassEligible ? '🎫' : '💰';
+          responseText += `${index + 1}. **${train.trainType} ${train.trainNo}** ${passIcon}\n`;
+          responseText += `   出發: ${train.departureTime} → 抵達: ${train.arrivalTime}\n`;
+          responseText += `   行程時間: ${train.travelTime} (${train.stops} 個中間站)\n\n`;
+        });
+
+        responseText += `🎫 = 月票可搭 | 💰 = 需另購票\n\n`;
       }
-      if (parsed.preferences?.fastest) {
-        responseText += `**Priority:** Fastest route\n`;
-      } else if (parsed.preferences?.cheapest) {
-        responseText += `**Priority:** Cheapest fare\n`;
-      }
-      if (parsed.preferences?.directOnly) {
-        responseText += `**Requirement:** Direct trains only\n`;
-      }
-      
-      responseText += `**Confidence:** ${Math.round(parsed.confidence * 100)}%\n\n`;
-      
-      // Add machine-readable data for future integration
+
+      // Add machine-readable data
       const structuredData = JSON.stringify({
-        parsed: {
-          origin: parsed.origin,
-          destination: parsed.destination,
-          date: parsed.date,
-          time: parsed.time,
-          preferences: parsed.preferences,
-          confidence: parsed.confidence
+        route: {
+          origin: { id: originStation.stationId, name: originStation.name },
+          destination: { id: destinationStation.stationId, name: destinationStation.name }
         },
-        status: 'ready_for_timetable_api',
-        nextStep: 'Call TDX timetable API with validated parameters'
+        date: parsed.date || new Date().toISOString().split('T')[0],
+        totalTrains: timetableData.length,
+        filteredTrains: filteredResults.length,
+        trains: filteredResults.map(train => ({
+          trainNo: train.trainNo,
+          trainType: train.trainType,
+          departure: train.departureTime,
+          arrival: train.arrivalTime,
+          travelTime: train.travelTime,
+          monthlyPassEligible: train.isMonthlyPassEligible,
+          stops: train.stops
+        }))
       }, null, 2);
-      
-      responseText += `[STAGE 5] Query parsing successful! Ready for TDX API integration in Stage 6.\n\n`;
+
       responseText += `**Machine-readable data:**\n\`\`\`json\n${structuredData}\n\`\`\``;
 
       return {
@@ -663,7 +883,11 @@ class SmartTRAServer {
       return {
         content: [{
           type: 'text',
-          text: `❌ Error parsing train search query: ${error instanceof Error ? error.message : String(error)}`
+          text: `❌ Error searching trains: ${error instanceof Error ? error.message : String(error)}\n\n` +
+                `This might be due to:\n` +
+                `• Network connectivity issues\n` +
+                `• TDX API service unavailable\n` +
+                `• Invalid station IDs or date format`
         }]
       };
     }
