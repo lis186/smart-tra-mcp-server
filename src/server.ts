@@ -358,7 +358,7 @@ class SmartTRAServer {
     return tokenData.access_token;
   }
 
-  // Call TDX Daily Train Timetable API
+  // Call TDX Daily Train Timetable API with data availability handling
   private async getDailyTrainTimetable(originStationId: string, destinationStationId: string, trainDate?: string): Promise<TRATrainTimetable[]> {
     try {
       const token = await this.getAccessToken();
@@ -378,10 +378,26 @@ class SmartTRAServer {
       });
 
       if (!response.ok) {
+        // Handle common API failure scenarios
+        if (response.status === 404) {
+          console.log(`No timetable data found for route ${originStationId} → ${destinationStationId} on ${date}`);
+          return []; // Return empty array for no data found
+        }
         throw new Error(`Failed to fetch train timetable: ${response.status} ${response.statusText}`);
       }
 
       const data = await response.json() as TRATrainTimetable[];
+      
+      // Handle data availability scenarios
+      if (!data || data.length === 0) {
+        console.log(`No trains available for route ${originStationId} → ${destinationStationId} on ${date}`);
+        console.log('This could happen if:');
+        console.log('- No trains run on this route on the specified date');
+        console.log('- Trains are suspended due to maintenance or weather');
+        console.log('- Date is outside of available timetable data');
+        return [];
+      }
+      
       console.log(`Retrieved ${data.length} trains for ${originStationId} → ${destinationStationId} on ${date}`);
       return data;
     } catch (error) {
@@ -455,6 +471,39 @@ class SmartTRAServer {
       }
     } catch (error) {
       return '未知';
+    }
+  }
+
+  // Attempt to get live delay data (optional enhancement when available)
+  private async tryGetLiveDelayData(stationId: string): Promise<any[]> {
+    try {
+      const token = await this.getAccessToken();
+      const baseUrl = process.env.TDX_BASE_URL || 'https://tdx.transportdata.tw/api/basic';
+      
+      const response = await fetch(`${baseUrl}/v3/Rail/TRA/StationLiveBoard/Station/${stationId}?%24format=JSON&%24top=20`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        console.log(`Live data not available for station ${stationId} (${response.status})`);
+        return [];
+      }
+
+      const liveData = await response.json() as any[];
+      
+      if (!Array.isArray(liveData) || liveData.length === 0) {
+        console.log(`No live trains found for station ${stationId} - trains may not be running`);
+        return [];
+      }
+      
+      console.log(`Found ${liveData.length} live trains for station ${stationId}`);
+      return liveData;
+    } catch (error) {
+      console.log(`Failed to get live data for station ${stationId}:`, error instanceof Error ? error.message : String(error));
+      return []; // Graceful fallback - return empty array
     }
   }
 
@@ -889,9 +938,15 @@ class SmartTRAServer {
                   `**Route:** ${originStation.name} → ${destinationStation.name}\n` +
                   `**Date:** ${parsed.date || 'Today'}\n\n` +
                   `This might happen if:\n` +
-                  `• The route requires transfers (try nearby major stations)\n` +
-                  `• The date is too far in the future\n` +
-                  `• There are no direct trains on this route`
+                  `• **No service today**: Trains may not run on this route today\n` +
+                  `• **Suspended service**: Trains temporarily suspended due to maintenance or weather\n` +
+                  `• **Requires transfers**: Route needs connections (try nearby major stations)\n` +
+                  `• **Future date**: Date is outside available timetable data\n` +
+                  `• **No direct trains**: No direct service on this route\n\n` +
+                  `**Suggestions:**\n` +
+                  `• Try a different date or check for service alerts\n` +
+                  `• Search for routes via major stations (台北, 台中, 高雄)\n` +
+                  `• Check TRA official website for service updates`
           }]
         };
       }

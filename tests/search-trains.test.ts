@@ -332,7 +332,131 @@ describe('Stage 6: search_trains Tool', () => {
       const result = await server['handleSearchTrains']('台北到台中');
       
       expect(result.content[0].text).toContain('❌ No trains found for this route');
-      expect(result.content[0].text).toContain('This might happen if:');
+      expect(result.content[0].text).toContain('**No service today**');
+      expect(result.content[0].text).toContain('**Suggestions:**');
+    });
+  });
+
+  describe('Data Availability Handling', () => {
+    test('should provide detailed error message when no trains found', async () => {
+      // Mock complete setup: auth token, station data, then empty timetable
+      (fetch as jest.MockedFunction<typeof fetch>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockStationData
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => []
+        } as Response);
+
+      const result = await server['handleSearchTrains']('台北到台中');
+      
+      expect(result.content[0].text).toContain('❌ No trains found for this route');
+      expect(result.content[0].text).toContain('**No service today**');
+      expect(result.content[0].text).toContain('**Suspended service**');
+      expect(result.content[0].text).toContain('**Suggestions:**');
+      expect(result.content[0].text).toContain('Try a different date or check for service alerts');
+      expect(result.content[0].text).toContain('Check TRA official website for service updates');
+    });
+  });
+
+  describe('Live Data Integration', () => {
+    test('should handle live data API unavailability gracefully', async () => {
+      // Mock auth token first, then 404 for live data API
+      (fetch as jest.MockedFunction<typeof fetch>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 404,
+          statusText: 'Not Found'
+        } as Response);
+
+      const result = await server['tryGetLiveDelayData']('1000');
+      
+      expect(result).toEqual([]);
+    });
+
+    test('should handle empty live data response', async () => {
+      // Mock auth token first, then empty live data
+      (fetch as jest.MockedFunction<typeof fetch>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => []
+        } as Response);
+
+      const result = await server['tryGetLiveDelayData']('1000');
+      
+      expect(result).toEqual([]);
+    });
+
+    test('should handle live data network errors', async () => {
+      // Mock auth token first, then network error for live data
+      (fetch as jest.MockedFunction<typeof fetch>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
+        } as Response)
+        .mockRejectedValueOnce(new Error('Network error'));
+
+      const result = await server['tryGetLiveDelayData']('1000');
+      
+      expect(result).toEqual([]);
+    });
+
+    test('should return live data when available', async () => {
+      const mockLiveData = [
+        {
+          TrainNo: '1234',
+          StationID: '1000',
+          DepartureTime: '08:00:00',
+          DelayTime: 5,
+          Status: '準點'
+        }
+      ];
+
+      // Mock auth token first, then live data
+      (fetch as jest.MockedFunction<typeof fetch>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockLiveData
+        } as Response);
+
+      const result = await server['tryGetLiveDelayData']('1000');
+      
+      expect(result).toEqual(mockLiveData);
+    });
+
+    test('should handle non-array live data response', async () => {
+      // Mock auth token first, then malformed response
+      (fetch as jest.MockedFunction<typeof fetch>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ error: 'Invalid format' })
+        } as Response);
+
+      const result = await server['tryGetLiveDelayData']('1000');
+      
+      expect(result).toEqual([]);
     });
   });
 
