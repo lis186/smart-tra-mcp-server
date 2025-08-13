@@ -193,6 +193,24 @@ describe('QueryParser', () => {
       expect(result.destination).toBeUndefined();
     });
 
+    test('should handle null input gracefully', () => {
+      const result = parser.parse(null as any);
+      expect(result.confidence).toBe(0);
+      expect(result.rawQuery).toBe('');
+    });
+
+    test('should handle undefined input gracefully', () => {
+      const result = parser.parse(undefined as any);
+      expect(result.confidence).toBe(0);
+      expect(result.rawQuery).toBe('');
+    });
+
+    test('should handle non-string input', () => {
+      const result = parser.parse(123 as any);
+      expect(result.confidence).toBe(0);
+      expect(result.rawQuery).toBe('');
+    });
+
     test('should handle query with only origin', () => {
       const result = parser.parse('台北');
       expect(result.origin).toBeUndefined();
@@ -219,6 +237,66 @@ describe('QueryParser', () => {
       const result = parser.parse('台北→台中');
       expect(result.origin).toBe('台北');
       expect(result.destination).toBe('台中');
+    });
+
+    test('should sanitize control characters', () => {
+      const result = parser.parse('台北\x00到\x1f台中\x7f');
+      expect(result.origin).toBe('台北');
+      expect(result.destination).toBe('台中');
+      expect(result.rawQuery).not.toContain('\x00');
+    });
+
+    test('should normalize excessive whitespace', () => {
+      const result = parser.parse('台北    到    台中');
+      expect(result.origin).toBe('台北');
+      expect(result.destination).toBe('台中');
+      expect(result.rawQuery).toBe('台北 到 台中');
+    });
+
+    test('should handle query exceeding max length', () => {
+      const longQuery = '台北到台中' + '很長的查詢'.repeat(200);
+      const result = parser.parse(longQuery);
+      expect(result.rawQuery.length).toBeLessThanOrEqual(500);
+      expect(result.origin).toBe('台北');
+      expect(result.destination).toBe('台中');
+    });
+
+    test('should handle mixed traditional and simplified Chinese', () => {
+      const result = parser.parse('臺北到台中'); // Mixed 臺 and 台
+      expect(result.origin).toBe('臺北');
+      expect(result.destination).toBe('台中');
+    });
+
+    test('should handle query with emoji', () => {
+      const result = parser.parse('台北🚄到台中😊');
+      expect(result.origin).toBe('台北');
+      expect(result.destination).toBe('台中');
+    });
+
+    test('should handle query with English mixed in', () => {
+      const result = parser.parse('從Taipei台北到Taichung台中');
+      expect(result.origin).toBe('台北');
+      expect(result.destination).toBe('台中');
+    });
+
+    test('should handle ambiguous separator in station names', () => {
+      // If a station name contains a separator character
+      const result = parser.parse('關山到台東');
+      expect(result.origin).toBe('關山');
+      expect(result.destination).toBe('台東');
+    });
+
+    test('should handle query with multiple separators', () => {
+      const result = parser.parse('台北到台中到高雄');
+      // Should extract first origin and last destination
+      expect(result.origin).toBe('台北');
+      expect(result.destination).toBeTruthy();
+    });
+
+    test('should handle query with no valid content', () => {
+      const result = parser.parse('！@#$%^&*()');
+      expect(result.confidence).toBe(0);
+      expect(result.origin).toBeUndefined();
     });
   });
 
@@ -256,6 +334,47 @@ describe('QueryParser', () => {
     });
   });
 
+  describe('Date Boundary Tests', () => {
+    test('should handle year transition for past month', () => {
+      // Mock current date to December
+      const originalDate = Date.prototype.toLocaleString;
+      Date.prototype.toLocaleString = function(this: Date, locale?: string | string[], options?: any) {
+        if (options?.timeZone === 'Asia/Taipei') {
+          return '2024/12/15, 10:00:00 AM';
+        }
+        return originalDate.call(this, locale, options);
+      } as any;
+
+      const result = parser.parse('台北到台中1月1日');
+      expect(result.date).toContain('2025-01-01');
+      
+      Date.prototype.toLocaleString = originalDate;
+    });
+
+    test('should handle leap year dates', () => {
+      const result = parser.parse('台北到台中2月29日');
+      expect(result.date).toBeDefined();
+      // Should handle based on whether current/next year is leap
+    });
+
+    test('should handle month-end dates', () => {
+      const result = parser.parse('台北到台中1月31日');
+      expect(result.date).toContain('-01-31');
+    });
+
+    test('should handle invalid dates gracefully', () => {
+      const result = parser.parse('台北到台中2月30日');
+      expect(result.date).toBeDefined();
+      // JavaScript Date will auto-correct to March 2
+    });
+
+    test('should handle weekday at year boundary', () => {
+      const result = parser.parse('台北到台中下週一');
+      expect(result.date).toBeDefined();
+      expect(result.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    });
+  });
+
   describe('Timezone Handling', () => {
     test('should use Taipei timezone for dates', () => {
       const result = parser.parse('台北到台中今天');
@@ -264,10 +383,32 @@ describe('QueryParser', () => {
       expect(date).toBeInstanceOf(Date);
       expect(date.toString()).not.toBe('Invalid Date');
     });
+
+    test('should handle date parsing across timezone boundaries', () => {
+      // Test that date is consistent regardless of system timezone
+      const result1 = parser.parse('台北到台中明天');
+      const result2 = parser.parse('台北到台中明天');
+      expect(result1.date).toBe(result2.date);
+    });
   });
 
   describe('Performance', () => {
-    test('should parse query within reasonable time', () => {
+    test('should parse simple query within reasonable time', () => {
+      const start = Date.now();
+      const iterations = 1000;
+      
+      for (let i = 0; i < iterations; i++) {
+        parser.parse('台北到台中');
+      }
+      
+      const elapsed = Date.now() - start;
+      const avgTime = elapsed / iterations;
+      
+      // Should parse in less than 2ms on average for simple queries
+      expect(avgTime).toBeLessThan(2);
+    });
+
+    test('should parse complex query within reasonable time', () => {
       const start = Date.now();
       const iterations = 1000;
       
@@ -278,8 +419,78 @@ describe('QueryParser', () => {
       const elapsed = Date.now() - start;
       const avgTime = elapsed / iterations;
       
-      // Should parse in less than 5ms on average
+      // Should parse in less than 5ms on average for complex queries
       expect(avgTime).toBeLessThan(5);
+    });
+
+    test('should handle performance regression for long queries', () => {
+      const longQuery = '台北' + '經過很多站'.repeat(50) + '到台中';
+      const start = Date.now();
+      
+      parser.parse(longQuery);
+      
+      const elapsed = Date.now() - start;
+      // Should not take more than 10ms even for long queries
+      expect(elapsed).toBeLessThan(10);
+    });
+
+    test('should maintain consistent performance across multiple parses', () => {
+      const times: number[] = [];
+      const query = '台北到台中明天早上8點';
+      
+      for (let i = 0; i < 100; i++) {
+        const start = performance.now();
+        parser.parse(query);
+        times.push(performance.now() - start);
+      }
+      
+      const avgTime = times.reduce((a, b) => a + b, 0) / times.length;
+      const maxTime = Math.max(...times);
+      
+      // Max time should not be more than 5x average (no performance spikes)
+      expect(maxTime).toBeLessThan(avgTime * 5);
+    });
+  });
+
+  describe('ReDoS Protection', () => {
+    test('should handle potentially malicious patterns without hanging', () => {
+      const maliciousPatterns = [
+        '台北' + '到'.repeat(1000) + '台中',
+        '台北到' + '台'.repeat(1000) + '中',
+        '從' + '台北'.repeat(100) + '到台中',
+        '台北到台中' + '最快'.repeat(100),
+        '台北' + '車站'.repeat(100) + '到台中'
+      ];
+
+      maliciousPatterns.forEach(pattern => {
+        const start = Date.now();
+        parser.parse(pattern);
+        const elapsed = Date.now() - start;
+        
+        // Should complete within 20ms even for malicious patterns
+        expect(elapsed).toBeLessThan(20);
+      });
+    });
+
+    test('should handle nested patterns efficiently', () => {
+      const nestedPattern = '從從從台北到到到台中';
+      const start = Date.now();
+      
+      const result = parser.parse(nestedPattern);
+      
+      const elapsed = Date.now() - start;
+      expect(elapsed).toBeLessThan(10);
+      expect(result).toBeDefined();
+    });
+
+    test('should handle backtracking patterns efficiently', () => {
+      const backtrackPattern = '台北北北北到台中中中中';
+      const start = Date.now();
+      
+      parser.parse(backtrackPattern);
+      
+      const elapsed = Date.now() - start;
+      expect(elapsed).toBeLessThan(10);
     });
   });
 });
