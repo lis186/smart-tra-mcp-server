@@ -20,7 +20,8 @@
       "Bash(npm run test:auth:*)",
       "Bash(gh pr view:*)",
       "Bash(npm test:*)",
-      "Bash(pkill:*)"
+      "Bash(pkill:*)",
+      "Bash(git stash:*)"
     ],
     "deny": []
   }
