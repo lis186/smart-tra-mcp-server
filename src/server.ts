@@ -576,9 +576,11 @@ class SmartTRAServer {
       const travelTime = this.calculateTravelTime(departureTime, arrivalTime);
       
       // Count intermediate stops
-      const originIndex = train.StopTimes.findIndex(stop => stop.StationID === originStationId);
-      const destinationIndex = train.StopTimes.findIndex(stop => stop.StationID === destinationStationId);
-      const stops = Math.abs(destinationIndex - originIndex) - 1; // Exclude origin and destination
+      // Note: OD endpoint only returns origin and destination stops, so we use StopSequence
+      // to calculate the actual number of intermediate stations
+      const originSequence = originStop.StopSequence;
+      const destinationSequence = destinationStop.StopSequence;
+      const stops = Math.abs(destinationSequence - originSequence) - 1; // Exclude origin and destination
       
       // Check if eligible for monthly pass (區間車, 區間快車)
       const monthlyPassTrainTypes = [MONTHLY_PASS_TRAIN_TYPES.LOCAL, MONTHLY_PASS_TRAIN_TYPES.FAST_LOCAL] as const;
