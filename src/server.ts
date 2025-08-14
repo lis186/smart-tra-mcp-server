@@ -407,7 +407,7 @@ class SmartTRAServer {
       expiresAt
     };
     
-    console.log('TDX access token obtained successfully');
+    console.error('TDX access token obtained successfully');
     return tokenData.access_token;
   }
 
@@ -433,7 +433,7 @@ class SmartTRAServer {
       if (!response.ok) {
         // Handle common API failure scenarios
         if (response.status === 404) {
-          console.log(`No timetable data found for route ${originStationId} → ${destinationStationId} on ${date}`);
+          console.error(`No timetable data found for route ${originStationId} → ${destinationStationId} on ${date}`);
           return []; // Return empty array for no data found
         }
         throw new Error(`Failed to fetch train timetable: ${response.status} ${response.statusText}`);
@@ -443,15 +443,15 @@ class SmartTRAServer {
       
       // Handle data availability scenarios
       if (!data || data.length === 0) {
-        console.log(`No trains available for route ${originStationId} → ${destinationStationId} on ${date}`);
-        console.log('This could happen if:');
-        console.log('- No trains run on this route on the specified date');
-        console.log('- Trains are suspended due to maintenance or weather');
-        console.log('- Date is outside of available timetable data');
+        console.error(`No trains available for route ${originStationId} → ${destinationStationId} on ${date}`);
+        console.error('This could happen if:');
+        console.error('- No trains run on this route on the specified date');
+        console.error('- Trains are suspended due to maintenance or weather');
+        console.error('- Date is outside of available timetable data');
         return [];
       }
       
-      console.log(`Retrieved ${data.length} trains for ${originStationId} → ${destinationStationId} on ${date}`);
+      console.error(`Retrieved ${data.length} trains for ${originStationId} → ${destinationStationId} on ${date}`);
       return data;
     } catch (error) {
       console.error('Error fetching train timetable:', error);
@@ -544,23 +544,23 @@ class SmartTRAServer {
       });
 
       if (!response.ok) {
-        console.log(`Fare data not available for route ${originStationId} → ${destinationStationId} (${response.status})`);
+        console.error(`Fare data not available for route ${originStationId} → ${destinationStationId} (${response.status})`);
         return null;
       }
 
       const fareData = await response.json() as TDXFareResponse[];
       
       if (!Array.isArray(fareData) || fareData.length === 0) {
-        console.log(`No fare data found for route ${originStationId} → ${destinationStationId}`);
+        console.error(`No fare data found for route ${originStationId} → ${destinationStationId}`);
         return null;
       }
 
       // Process fare data to extract common ticket types
       const fareInfo = this.processFareData(fareData[0]);
-      console.log(`Retrieved fare data for ${originStationId} → ${destinationStationId}`);
+      console.error(`Retrieved fare data for ${originStationId} → ${destinationStationId}`);
       return fareInfo;
     } catch (error) {
-      console.log(`Failed to get fare data for ${originStationId} → ${destinationStationId}:`, error instanceof Error ? error.message : String(error));
+      console.error(`Failed to get fare data for ${originStationId} → ${destinationStationId}:`, error instanceof Error ? error.message : String(error));
       return null; // Graceful fallback
     }
   }
@@ -652,21 +652,21 @@ class SmartTRAServer {
       });
 
       if (!response.ok) {
-        console.log(`Live data not available for station ${stationId} (${response.status})`);
+        console.error(`Live data not available for station ${stationId} (${response.status})`);
         return [];
       }
 
       const liveData = await response.json() as any[];
       
       if (!Array.isArray(liveData) || liveData.length === 0) {
-        console.log(`No live trains found for station ${stationId} - trains may not be running`);
+        console.error(`No live trains found for station ${stationId} - trains may not be running`);
         return [];
       }
       
-      console.log(`Found ${liveData.length} live trains for station ${stationId}`);
+      console.error(`Found ${liveData.length} live trains for station ${stationId}`);
       return liveData;
     } catch (error) {
-      console.log(`Failed to get live data for station ${stationId}:`, error instanceof Error ? error.message : String(error));
+      console.error(`Failed to get live data for station ${stationId}:`, error instanceof Error ? error.message : String(error));
       return []; // Graceful fallback - return empty array
     }
   }
@@ -837,7 +837,7 @@ class SmartTRAServer {
     this.lastStationLoadAttempt = now;
 
     try {
-      console.log('Loading TRA station data from TDX API...');
+      console.error('Loading TRA station data from TDX API...');
       const token = await this.getAccessToken();
       const baseUrl = process.env.TDX_BASE_URL || 'https://tdx.transportdata.tw/api/basic';
       
@@ -856,7 +856,7 @@ class SmartTRAServer {
       this.buildSearchIndexes();
       this.stationDataLoaded = true;
       this.stationLoadFailed = false;
-      console.log(`Loaded ${this.stationData.length} TRA stations from TDX API`);
+      console.error(`Loaded ${this.stationData.length} TRA stations from TDX API`);
     } catch (error) {
       console.error('Failed to load station data:', error);
       this.stationDataLoaded = false;
@@ -887,7 +887,7 @@ class SmartTRAServer {
       }
     }
 
-    console.log(`Built search indexes: ${this.stationNameIndex.size} names, ${this.stationPrefixIndex.size} prefixes`);
+    console.error(`Built search indexes: ${this.stationNameIndex.size} names, ${this.stationPrefixIndex.size} prefixes`);
   }
 
   private addToIndex(index: Map<string, TRAStation[]>, key: string, station: TRAStation): void {
@@ -1408,7 +1408,7 @@ class SmartTRAServer {
     
     const afterCount = this.requestCount.size;
     if (beforeCount !== afterCount) {
-      console.log(`Rate limit cleanup: removed ${beforeCount - afterCount} inactive clients`);
+      console.error(`Rate limit cleanup: removed ${beforeCount - afterCount} inactive clients`);
     }
   }
 
@@ -1416,12 +1416,12 @@ class SmartTRAServer {
     // Only set up shutdown handlers if not in test environment
     if (!isTestEnvironment()) {
       const gracefulShutdown = async (signal: string) => {
-        console.log(`Received ${signal}, starting graceful shutdown...`);
+        console.error(`Received ${signal}, starting graceful shutdown...`);
         this.isShuttingDown = true;
         
         // Give ongoing requests time to complete with proper timeout
         const shutdownTimer = setTimeout(() => {
-          console.log('Graceful shutdown timeout reached, forcing exit');
+          console.error('Graceful shutdown timeout reached, forcing exit');
           process.exit(1);
         }, this.GRACEFUL_SHUTDOWN_TIMEOUT);
         
@@ -1430,7 +1430,7 @@ class SmartTRAServer {
           // Wait a bit for current requests to finish
           await new Promise(resolve => setTimeout(resolve, 1000));
           clearTimeout(shutdownTimer);
-          console.log('Graceful shutdown complete');
+          console.error('Graceful shutdown complete');
           process.exit(0);
         } catch (error) {
           clearTimeout(shutdownTimer);
@@ -1447,7 +1447,7 @@ class SmartTRAServer {
   async start() {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.log('Smart TRA MCP Server started successfully');
+    console.error('Smart TRA MCP Server started successfully');
   }
 
   // Health check method for future use

@@ -421,6 +421,8 @@ smart-tra-mcp-server/
 3. **Hardcoding Values**: Use configuration for all environment-specific values
 4. **Poor Error Messages**: Always provide actionable suggestions to users
 5. **Skipping Integration Tests**: Unit tests pass but real APIs behave differently
+6. **Using console.log in MCP Servers**: NEVER use `console.log` in MCP servers - it corrupts the JSON-RPC protocol on stdout. Always use `console.error` for debugging output
+7. **Missing .js Extensions**: In ES modules, always include `.js` extensions in relative imports (e.g., `import { Parser } from './parser.js'`)
 
 ### Documentation to Maintain
 
@@ -448,6 +450,7 @@ When multiple valid approaches exist, choose based on:
 - Disable tests instead of fixing them
 - Commit code that doesn't compile
 - Make assumptions - verify with existing code
+- Use `console.log` in MCP servers (breaks JSON-RPC protocol)
 
 **ALWAYS**:
 
@@ -457,3 +460,5 @@ When multiple valid approaches exist, choose based on:
 - Stop after 3 failed attempts and reassess
 - Run formatters/linters before committing
 - Self-review changes before pushing
+- Use `console.error` for debugging in MCP servers (not `console.log`)
+- Include `.js` extensions in ES module imports
