@@ -29,6 +29,7 @@
       "Bash(timeout:*)",
       "Bash(touch:*)"
     ],
-    "deny": []
+    "deny": [],
+    "defaultMode": "acceptEdits"
   }
 }
