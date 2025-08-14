@@ -576,9 +576,11 @@ class SmartTRAServer {
       const travelTime = this.calculateTravelTime(departureTime, arrivalTime);
       
       // Count intermediate stops
-      const originIndex = train.StopTimes.findIndex(stop => stop.StationID === originStationId);
-      const destinationIndex = train.StopTimes.findIndex(stop => stop.StationID === destinationStationId);
-      const stops = Math.abs(destinationIndex - originIndex) - 1; // Exclude origin and destination
+      // Note: OD endpoint only returns origin and destination stops, so we use StopSequence
+      // to calculate the actual number of intermediate stations
+      const originSequence = originStop.StopSequence;
+      const destinationSequence = destinationStop.StopSequence;
+      const stops = Math.abs(destinationSequence - originSequence) - 1; // Exclude origin and destination
       
       // Check if eligible for monthly pass (區間車, 區間快車)
       const monthlyPassTrainTypes = [MONTHLY_PASS_TRAIN_TYPES.LOCAL, MONTHLY_PASS_TRAIN_TYPES.FAST_LOCAL] as const;
@@ -781,6 +783,11 @@ class SmartTRAServer {
     // Default: Filter to monthly pass eligible trains only
     if (!preferences?.includeAllTrainTypes) {
       filtered = filtered.filter(train => train.isMonthlyPassEligible);
+    }
+    
+    // Filter for direct trains only if requested
+    if (preferences?.directOnly) {
+      filtered = filtered.filter(train => train.stops === 0);
     }
     
     // Determine base time for filtering
@@ -1322,9 +1329,11 @@ class SmartTRAServer {
             const timeInfo = train.minutesUntilDeparture ? ` (${train.minutesUntilDeparture}分後)` : '';
             const fareText = train.fareInfo ? ` | 票價: $${train.fareInfo.adult}` : '';
             
+            const stopDescription = train.stops === 0 ? '直達' : `經停 ${train.stops} 站`;
+            
             responseText += `${index + 1}. **${train.trainType} ${train.trainNo}** ${passIcon}${lateWarning}\n`;
             responseText += `   出發: ${train.departureTime}${timeInfo} → 抵達: ${train.arrivalTime}\n`;
-            responseText += `   行程時間: ${train.travelTime} (${train.stops} 個中間站)${fareText}\n\n`;
+            responseText += `   行程時間: ${train.travelTime} (${stopDescription})${fareText}\n\n`;
           });
         }
         
@@ -1335,9 +1344,11 @@ class SmartTRAServer {
             const lateWarning = train.lateWarning ? ` ${train.lateWarning}` : '';
             const fareText = train.fareInfo ? ` | 票價: $${train.fareInfo.adult}` : '';
             
+            const stopDescription = train.stops === 0 ? '直達' : `經停 ${train.stops} 站`;
+            
             responseText += `${primaryTrains.length + index + 1}. **${train.trainType} ${train.trainNo}** 💰${lateWarning}\n`;
             responseText += `   出發: ${train.departureTime}${timeInfo} → 抵達: ${train.arrivalTime}\n`;
-            responseText += `   行程時間: ${train.travelTime} (${train.stops} 個中間站)${fareText}\n\n`;
+            responseText += `   行程時間: ${train.travelTime} (${stopDescription})${fareText}\n\n`;
           });
         }
 

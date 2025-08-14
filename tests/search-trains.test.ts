@@ -5,82 +5,97 @@
 
 import { SmartTRAServer } from '../src/server';
 
-// Mock TRA train timetable data
+// Mock TRA train timetable data in v3 API format
 const mockTrainData = [
   {
-    TrainNo: '1234',
-    RouteID: 'TRA-R001',
-    Direction: 0,
-    TrainClassificationID: '10',
-    TrainTypeID: '10',
-    TrainTypeName: { Zh_tw: '區間車', En: 'Local' },
-    StartingStationID: '1000',
-    StartingStationName: { Zh_tw: '臺北', En: 'Taipei' },
-    EndingStationID: '3300',
-    EndingStationName: { Zh_tw: '臺中', En: 'Taichung' },
-    TripLine: 1,
-    WheelChairFlag: 1,
-    PackageServiceFlag: 0,
-    DiningFlag: 0,
-    BreastFeedFlag: 1,
-    BikeFlag: 1,
-    TrainDate: '2025-08-13',
+    TrainInfo: {
+      TrainNo: '1234',
+      Direction: 0,
+      TrainTypeID: '10',
+      TrainTypeCode: '10',
+      TrainTypeName: { Zh_tw: '區間車', En: 'Local' },
+      TripHeadSign: '臺中',
+      StartingStationID: '1000',
+      StartingStationName: { Zh_tw: '臺北', En: 'Taipei' },
+      EndingStationID: '3300',
+      EndingStationName: { Zh_tw: '臺中', En: 'Taichung' },
+      TripLine: 1,
+      WheelChairFlag: 1,
+      PackageServiceFlag: 0,
+      DiningFlag: 0,
+      BreastFeedFlag: 1,
+      BikeFlag: 1,
+      CarFlag: 0,
+      DailyFlag: 1,
+      ExtraTrainFlag: 0,
+      SuspendedFlag: 0
+    },
     StopTimes: [
       {
+        StopSequence: 1,
         StationID: '1000',
         StationName: { Zh_tw: '臺北', En: 'Taipei' },
         ArrivalTime: '08:00:00',
         DepartureTime: '08:00:00',
-        StopTime: 0
+        SuspendedFlag: 0
       },
       {
+        StopSequence: 2,
         StationID: '1100',
         StationName: { Zh_tw: '桃園', En: 'Taoyuan' },
         ArrivalTime: '08:30:00',
         DepartureTime: '08:32:00',
-        StopTime: 2
+        SuspendedFlag: 0
       },
       {
+        StopSequence: 3,
         StationID: '3300',
         StationName: { Zh_tw: '臺中', En: 'Taichung' },
         ArrivalTime: '10:15:00',
         DepartureTime: '10:15:00',
-        StopTime: 0
+        SuspendedFlag: 0
       }
     ]
   },
   {
-    TrainNo: '5678',
-    RouteID: 'TRA-R001',
-    Direction: 0,
-    TrainClassificationID: '100',
-    TrainTypeID: '100',
-    TrainTypeName: { Zh_tw: '自強號', En: 'Taroko Express' },
-    StartingStationID: '1000',
-    StartingStationName: { Zh_tw: '臺北', En: 'Taipei' },
-    EndingStationID: '3300',
-    EndingStationName: { Zh_tw: '臺中', En: 'Taichung' },
-    TripLine: 1,
-    WheelChairFlag: 1,
-    PackageServiceFlag: 1,
-    DiningFlag: 1,
-    BreastFeedFlag: 1,
-    BikeFlag: 0,
-    TrainDate: '2025-08-13',
+    TrainInfo: {
+      TrainNo: '5678',
+      Direction: 0,
+      TrainTypeID: '100',
+      TrainTypeCode: '100',
+      TrainTypeName: { Zh_tw: '自強號', En: 'Taroko Express' },
+      TripHeadSign: '臺中',
+      StartingStationID: '1000',
+      StartingStationName: { Zh_tw: '臺北', En: 'Taipei' },
+      EndingStationID: '3300',
+      EndingStationName: { Zh_tw: '臺中', En: 'Taichung' },
+      TripLine: 1,
+      WheelChairFlag: 1,
+      PackageServiceFlag: 1,
+      DiningFlag: 1,
+      BreastFeedFlag: 1,
+      BikeFlag: 0,
+      CarFlag: 0,
+      DailyFlag: 1,
+      ExtraTrainFlag: 0,
+      SuspendedFlag: 0
+    },
     StopTimes: [
       {
+        StopSequence: 1,
         StationID: '1000',
         StationName: { Zh_tw: '臺北', En: 'Taipei' },
         ArrivalTime: '09:00:00',
         DepartureTime: '09:00:00',
-        StopTime: 0
+        SuspendedFlag: 0
       },
       {
+        StopSequence: 2,
         StationID: '3300',
         StationName: { Zh_tw: '臺中', En: 'Taichung' },
         ArrivalTime: '10:30:00',
         DepartureTime: '10:30:00',
-        StopTime: 0
+        SuspendedFlag: 0
       }
     ]
   }
@@ -149,18 +164,35 @@ describe('Stage 6: search_trains Tool', () => {
 
   describe('TDX API Integration', () => {
     test('should call TDX Daily Train Timetable API', async () => {
-      // Mock train timetable response
+      // Mock date range response first
       (fetch as jest.MockedFunction<typeof fetch>)
         .mockResolvedValueOnce({
           ok: true,
-          json: async () => mockTrainData
+          json: async () => ({
+            UpdateTime: '2025-08-14T15:00:00',
+            UpdateInterval: 300,
+            AuthorityCode: 'TRA',
+            StartDate: '2025-08-14',
+            EndDate: '2025-08-20',
+            TrainDates: ['2025-08-14', '2025-08-15', '2025-08-16'],
+            Count: 3
+          })
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            UpdateTime: '2025-08-14T15:00:00',
+            UpdateInterval: 300,
+            TrainDate: '2025-08-14',
+            TrainTimetables: mockTrainData
+          })
         } as Response);
 
       const result = await server['handleSearchTrains']('台北到台中');
       
       // Check that TDX API was called
       expect(fetch).toHaveBeenCalledWith(
-        expect.stringContaining('/v2/Rail/TRA/DailyTrainTimetable/OD/1000/to/3300/'),
+        expect.stringContaining('/v3/Rail/TRA/DailyTrainTimetable/OD/1000/to/3300/'),
         expect.objectContaining({
           headers: expect.objectContaining({
             'Authorization': 'Bearer mock_token'
@@ -187,11 +219,16 @@ describe('Stage 6: search_trains Tool', () => {
 
   describe('Train Data Processing', () => {
     beforeEach(() => {
-      // Mock train timetable response for all tests
+      // Mock v3 API responses for all tests
       (fetch as jest.MockedFunction<typeof fetch>)
         .mockResolvedValue({
           ok: true,
-          json: async () => mockTrainData
+          json: async () => ({
+            UpdateTime: '2025-08-14T15:00:00',
+            UpdateInterval: 300,
+            TrainDate: '2025-08-14',
+            TrainTimetables: mockTrainData
+          })
         } as Response);
     });
 
@@ -229,7 +266,12 @@ describe('Stage 6: search_trains Tool', () => {
       (fetch as jest.MockedFunction<typeof fetch>)
         .mockResolvedValue({
           ok: true,
-          json: async () => mockTrainData
+          json: async () => ({
+            UpdateTime: '2025-08-14T15:00:00',
+            UpdateInterval: 300,
+            TrainDate: '2025-08-13',
+            TrainTimetables: mockTrainData
+          })
         } as Response);
     });
 
@@ -313,11 +355,36 @@ describe('Stage 6: search_trains Tool', () => {
 
   describe('Response Format', () => {
     beforeEach(() => {
+      // Mock current time to be 07:00 AM for time window testing
+      jest.spyOn(Date, 'now').mockReturnValue(new Date('2025-08-14T07:00:00').getTime());
+      
+      // Mock the date range response first, then train data
       (fetch as jest.MockedFunction<typeof fetch>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            UpdateTime: '2025-08-14T15:00:00',
+            UpdateInterval: 300,
+            AuthorityCode: 'TRA',
+            StartDate: '2025-08-14',
+            EndDate: '2025-08-20',
+            TrainDates: ['2025-08-14', '2025-08-15', '2025-08-16'],
+            Count: 3
+          })
+        } as Response)
         .mockResolvedValue({
           ok: true,
-          json: async () => mockTrainData
+          json: async () => ({
+            UpdateTime: '2025-08-14T15:00:00',
+            UpdateInterval: 300,
+            TrainDate: '2025-08-14',
+            TrainTimetables: mockTrainData
+          })
         } as Response);
+    });
+    
+    afterEach(() => {
+      jest.restoreAllMocks();
     });
 
     test('should include machine-readable JSON data', async () => {
@@ -334,7 +401,7 @@ describe('Stage 6: search_trains Tool', () => {
       
       expect(result.content[0].text).toContain('1. **自強號 5678** 💰'); // backup option
       expect(result.content[0].text).toContain('出發: 09:00:00'); 
-      expect(result.content[0].text).toContain('行程時間: 1小時30分 (0 個中間站)');
+      expect(result.content[0].text).toContain('行程時間: 1小時30分 (直達)'); // Updated to use new format
     });
 
     test('should handle no trains found scenario', async () => {
