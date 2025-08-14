@@ -443,6 +443,33 @@ When multiple valid approaches exist, choose based on:
 4. **Simplicity** - Is this the simplest solution that works?
 5. **Reversibility** - How hard to change later?
 
+### GitHub Issue Workflow
+
+When fixing a GitHub issue:
+
+1. **Create a new branch** for the issue (e.g., `fix/issue-123` or `feat/issue-456`)
+2. **Find the root cause first** - Understand the problem before implementing a solution
+3. **Fix and test the solution** - Ensure the fix works and doesn't break existing functionality
+4. **Commit changes at each step** - Make incremental commits with clear messages
+5. **Ask for verification** - Request user to verify the fix before considering it complete
+6. **Only push when explicitly requested** - Never push to remote unless user asks
+7. **Only create PR when explicitly requested** - Never create pull requests unless user asks
+
+### Implementation Workflow
+
+When implementing new features or functionality:
+
+1. **Understand requirements first** - Clarify what needs to be built before starting
+2. **Study existing patterns** - Look at similar implementations in the codebase
+3. **Use TodoWrite tool** - Create a task list for complex implementations (3+ steps)
+4. **Start with minimal working version** - Get basic functionality working first
+5. **Iterate and enhance** - Add features incrementally, test each addition
+6. **Commit frequently** - Make commits after each working increment
+7. **Run tests and linters** - Execute `npm run build`, `npm test`, `npm run lint` if available
+8. **Ask for feedback** - Request user verification at key milestones
+9. **Document decisions** - Update relevant docs if making architectural choices
+10. **Only push/PR when requested** - Never push or create PRs unless explicitly asked
+
 ### Important Reminders
 
 **NEVER**:
@@ -453,6 +480,7 @@ When multiple valid approaches exist, choose based on:
 - Make assumptions - verify with existing code
 - Use `console.log` in MCP servers (breaks JSON-RPC protocol)
 - Import packages that output to stdout in MCP servers (e.g., dotenv)
+- Push to remote unless explicitly requested by user
 
 **ALWAYS**:
 
@@ -465,3 +493,4 @@ When multiple valid approaches exist, choose based on:
 - Use `console.error` for debugging in MCP servers (not `console.log`)
 - Include `.js` extensions in ES module imports
 - Verify third-party packages don't output to stdout in MCP servers
+- Create a new branch when working on GitHub issues
