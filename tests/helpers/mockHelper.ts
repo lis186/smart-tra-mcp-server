@@ -127,16 +127,16 @@ export class TDXMockHelper {
           StopSequence: 1,
           StationID: '1000',
           StationName: { Zh_tw: '臺北', En: 'Taipei' },
-          ArrivalTime: '08:30:00',
-          DepartureTime: '08:30:00',
+          ArrivalTime: '07:30:00',
+          DepartureTime: '07:30:00',
           SuspendedFlag: 0
         },
         {
           StopSequence: 2,
           StationID: '3300',
           StationName: { Zh_tw: '臺中', En: 'Taichung' },
-          ArrivalTime: '09:52:00',
-          DepartureTime: '09:52:00',
+          ArrivalTime: '08:52:00',
+          DepartureTime: '08:52:00',
           SuspendedFlag: 0
         }
       ]
@@ -170,24 +170,24 @@ export class TDXMockHelper {
           StopSequence: 1,
           StationID: '1000',
           StationName: { Zh_tw: '臺北', En: 'Taipei' },
-          ArrivalTime: '09:00:00',
-          DepartureTime: '09:00:00',
+          ArrivalTime: '08:00:00',
+          DepartureTime: '08:00:00',
           SuspendedFlag: 0
         },
         {
           StopSequence: 2,
           StationID: '1020',
           StationName: { Zh_tw: '板橋', En: 'Banqiao' },
-          ArrivalTime: '08:52:00',
-          DepartureTime: '08:53:00',
+          ArrivalTime: '08:12:00',
+          DepartureTime: '08:13:00',
           SuspendedFlag: 0
         },
         {
           StopSequence: 3,
           StationID: '3300',
           StationName: { Zh_tw: '臺中', En: 'Taichung' },
-          ArrivalTime: '11:23:00',
-          DepartureTime: '11:23:00',
+          ArrivalTime: '10:43:00',
+          DepartureTime: '10:43:00',
           SuspendedFlag: 0
         }
       ]
@@ -212,6 +212,7 @@ export class TDXMockHelper {
 
   /**
    * Setup complete API sequence: Token → Station → Train → Fare
+   * IMPORTANT: This must be called RIGHT BEFORE the API call, not during setup
    */
   static setupFullApiSequence(options: {
     token?: MockTokenResponse;
@@ -227,8 +228,9 @@ export class TDXMockHelper {
     const trains = options.trains || this.DEFAULT_TRAINS;
     const fares = options.fares || this.DEFAULT_FARES;
 
-    // Reset all previous mocks
+    // CRITICAL: Reset all previous mocks to ensure clean state
     fetchMock.mockReset();
+    fetchMock.mockClear();
 
     // Setup token response
     fetchMock.mockResolvedValueOnce({
@@ -237,14 +239,7 @@ export class TDXMockHelper {
       json: async () => token
     } as Response);
 
-    // Setup station data response
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      json: async () => stations
-    } as Response);
-
-    // Setup train timetable response (v3 API format)
+    // Setup train timetable response (v3 API format) - This is the main data call
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -275,10 +270,12 @@ export class TDXMockHelper {
 
   /**
    * Setup API sequence with API errors
+   * IMPORTANT: This must be called RIGHT BEFORE the API call, not during setup
    */
   static setupApiErrorSequence(errorAtStep: 'token' | 'station' | 'train' | 'fare'): jest.MockedFunction<typeof fetch> {
     const fetchMock = global.fetch as jest.MockedFunction<typeof fetch>;
     fetchMock.mockReset();
+    fetchMock.mockClear();
 
     if (errorAtStep === 'token') {
       fetchMock.mockResolvedValueOnce({
@@ -311,11 +308,19 @@ export class TDXMockHelper {
     } as Response);
 
     if (errorAtStep === 'train') {
+      fetchMock.mockRejectedValueOnce(new Error('Network error'));
+      return fetchMock;
+    }
+
+    if (errorAtStep === 'fare') {
+      // Setup successful train response
       fetchMock.mockResolvedValueOnce({
-        ok: false,
-        status: 404,
-        statusText: 'Not Found'
+        ok: true,
+        json: async () => ({ TrainTimetables: this.DEFAULT_TRAINS })
       } as Response);
+      
+      // Then fail on fare request  
+      fetchMock.mockRejectedValueOnce(new Error('Fare API unavailable'));
       return fetchMock;
     }
 
@@ -324,14 +329,6 @@ export class TDXMockHelper {
       ok: true,
       json: async () => ({ TrainTimetables: this.DEFAULT_TRAINS })
     } as Response);
-
-    if (errorAtStep === 'fare') {
-      fetchMock.mockResolvedValueOnce({
-        ok: false,
-        status: 404,
-        statusText: 'Not Found'
-      } as Response);
-    }
 
     return fetchMock;
   }

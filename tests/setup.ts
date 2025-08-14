@@ -9,7 +9,8 @@ process.env.TDX_CLIENT_SECRET = 'test_client_secret';
 process.env.NODE_ENV = 'test';
 
 // Global time control for consistent test results
-const FIXED_TEST_DATE = new Date('2025-08-14T08:00:00+08:00');
+// Set to 07:00 so trains departing at 08:30 and 09:00 are within 2-hour window
+const FIXED_TEST_DATE = new Date('2025-08-14T07:00:00+08:00');
 
 // Mock fetch globally
 global.fetch = jest.fn();

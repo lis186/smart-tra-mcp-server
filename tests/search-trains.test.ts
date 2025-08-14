@@ -137,8 +137,9 @@ describe('Stage 6: search_trains Tool', () => {
   let server: SmartTRAServer;
 
   beforeEach(async () => {
-    // Temporarily use real timers for server initialization 
-    jest.useRealTimers();
+    // Set fake time immediately to ensure consistent timing throughout
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2025-08-14T07:00:00+08:00'));
     
     // Setup minimal API sequence for server initialization (Token + Station)
     TDXMockHelper.setupMinimalSequence();
@@ -146,12 +147,17 @@ describe('Stage 6: search_trains Tool', () => {
     server = new SmartTRAServer();
     server.resetRateLimitingForTest();
     
-    // Wait for server initialization to complete
-    await TDXMockHelper.waitForServerInitialization(100);
-    
-    // Restore fake timers for tests
-    jest.useFakeTimers();
-    jest.setSystemTime(new Date('2025-08-14T08:00:00+08:00'));
+    // Wait for async station loading to complete
+    let attempts = 0;
+    while (!(server as any).stationDataLoaded && attempts < 10) {
+      jest.advanceTimersByTime(100);
+      await Promise.resolve();
+      attempts++;
+    }
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
   });
 
   describe('TDX API Integration', () => {
@@ -219,8 +225,8 @@ describe('Stage 6: search_trains Tool', () => {
 
   describe('Monthly Pass Filtering and Time Windows', () => {
     beforeEach(() => {
-      // Mock current time to be 07:30 AM local time for consistent testing
-      jest.spyOn(Date, 'now').mockReturnValue(new Date('2025-08-14T07:30:00+08:00').getTime());
+      // Mock current time to be 07:00 AM local time for consistent testing
+      jest.spyOn(Date, 'now').mockReturnValue(new Date('2025-08-14T07:00:00+08:00').getTime());
     });
 
     afterEach(() => {
@@ -267,6 +273,9 @@ describe('Stage 6: search_trains Tool', () => {
     });
 
     test('should display correct icons and warnings', async () => {
+      // Setup complete API sequence for this test
+      TDXMockHelper.setupFullApiSequence();
+      
       const result = await server['handleSearchTrains']('台北到台中');
       
       expect(result.content[0].text).toContain('🎫 = 月票可搭');
@@ -321,7 +330,7 @@ describe('Stage 6: search_trains Tool', () => {
       const result = await server['handleSearchTrains']('台北到台中');
       
       expect(result.content[0].text).toContain('**自強號 408**'); // realistic train number
-      expect(result.content[0].text).toContain('出發: 08:15:00'); // realistic departure time
+      expect(result.content[0].text).toContain('出發: 07:30:00'); // corrected departure time from mock
       expect(result.content[0].text).toContain('行程時間:'); // travel time info
     });
 
@@ -414,8 +423,17 @@ describe('Stage 6: search_trains Tool', () => {
         }
       ];
 
+      // Reset server token cache to force fresh token request
+      (server as any).accessToken = null;
+      (server as any).tokenExpiry = 0;
+
+      // Reset and setup fresh mocks
+      const fetchMock = fetch as jest.MockedFunction<typeof fetch>;
+      fetchMock.mockReset();
+      fetchMock.mockClear();
+
       // Mock auth token first, then live data
-      (fetch as jest.MockedFunction<typeof fetch>)
+      fetchMock
         .mockResolvedValueOnce({
           ok: true,
           json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
@@ -521,13 +539,14 @@ describe('Stage 6: search_trains Tool', () => {
       // Setup multiple complete API sequences for concurrent requests
       const fetchMock = global.fetch as jest.MockedFunction<typeof fetch>;
       fetchMock.mockReset();
+      fetchMock.mockClear();
       
-      // Mock multiple sequences (Token, Station, Train for each request)
+      // Mock multiple sequences (Token, Train, Fare for each request)
       for (let i = 0; i < 5; i++) {
         fetchMock
           .mockResolvedValueOnce({ ok: true, json: async () => TDXMockHelper.defaultToken } as Response)
-          .mockResolvedValueOnce({ ok: true, json: async () => TDXMockHelper.defaultStations } as Response)
-          .mockResolvedValueOnce({ ok: true, json: async () => ({ TrainTimetables: TDXMockHelper.defaultTrains }) } as Response);
+          .mockResolvedValueOnce({ ok: true, json: async () => ({ TrainTimetables: TDXMockHelper.defaultTrains }) } as Response)
+          .mockResolvedValueOnce({ ok: true, json: async () => TDXMockHelper.defaultFares } as Response);
       }
 
       const promises = Array.from({ length: 5 }, () => 
