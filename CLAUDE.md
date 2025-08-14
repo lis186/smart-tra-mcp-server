@@ -423,6 +423,7 @@ smart-tra-mcp-server/
 5. **Skipping Integration Tests**: Unit tests pass but real APIs behave differently
 6. **Using console.log in MCP Servers**: NEVER use `console.log` in MCP servers - it corrupts the JSON-RPC protocol on stdout. Always use `console.error` for debugging output
 7. **Missing .js Extensions**: In ES modules, always include `.js` extensions in relative imports (e.g., `import { Parser } from './parser.js'`)
+8. **Third-party Dependencies Stdout Pollution**: Some packages like `dotenv` may output to stdout. In MCP servers, avoid packages that write to stdout or configure them to be silent
 
 ### Documentation to Maintain
 
@@ -451,6 +452,7 @@ When multiple valid approaches exist, choose based on:
 - Commit code that doesn't compile
 - Make assumptions - verify with existing code
 - Use `console.log` in MCP servers (breaks JSON-RPC protocol)
+- Import packages that output to stdout in MCP servers (e.g., dotenv)
 
 **ALWAYS**:
 
@@ -462,3 +464,4 @@ When multiple valid approaches exist, choose based on:
 - Self-review changes before pushing
 - Use `console.error` for debugging in MCP servers (not `console.log`)
 - Include `.js` extensions in ES module imports
+- Verify third-party packages don't output to stdout in MCP servers

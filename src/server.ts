@@ -6,11 +6,11 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import * as dotenv from 'dotenv';
 import { QueryParser, ParsedQuery } from './query-parser.js';
 
-// Load environment variables
-dotenv.config();
+// Load environment variables silently without dotenv to avoid stdout pollution
+// For MCP servers, env vars should be set by the host (Claude Desktop)
+// If needed, they can be loaded manually without console output
 
 // Utility function to check if running in test environment
 function isTestEnvironment(): boolean {
