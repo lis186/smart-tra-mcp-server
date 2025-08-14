@@ -8,6 +8,9 @@ process.env.TDX_CLIENT_ID = 'test_client_id';
 process.env.TDX_CLIENT_SECRET = 'test_client_secret';
 process.env.NODE_ENV = 'test';
 
+// Global time control for consistent test results
+const FIXED_TEST_DATE = new Date('2025-08-14T08:00:00+08:00');
+
 // Mock fetch globally
 global.fetch = jest.fn();
 
@@ -24,6 +27,17 @@ console.error = (...args: any[]) => {
   }
   originalError.apply(console, args);
 };
+
+// Setup global time control 
+beforeAll(() => {
+  // Use fake timers and set system time for consistent test results
+  jest.useFakeTimers();
+  jest.setSystemTime(FIXED_TEST_DATE);
+});
+
+afterAll(() => {
+  jest.useRealTimers();
+});
 
 // Reset mocks before each test
 beforeEach(() => {

@@ -137,6 +137,9 @@ describe('Stage 6: search_trains Tool', () => {
   let server: SmartTRAServer;
 
   beforeEach(async () => {
+    // Temporarily use real timers for server initialization 
+    jest.useRealTimers();
+    
     // Setup minimal API sequence for server initialization (Token + Station)
     TDXMockHelper.setupMinimalSequence();
 
@@ -144,7 +147,11 @@ describe('Stage 6: search_trains Tool', () => {
     server.resetRateLimitingForTest();
     
     // Wait for server initialization to complete
-    await TDXMockHelper.waitForServerInitialization(150);
+    await TDXMockHelper.waitForServerInitialization(100);
+    
+    // Restore fake timers for tests
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2025-08-14T08:00:00+08:00'));
   });
 
   describe('TDX API Integration', () => {
@@ -319,12 +326,8 @@ describe('Stage 6: search_trains Tool', () => {
     });
 
     test('should handle no trains found scenario', async () => {
-      // Mock empty response
-      (fetch as jest.MockedFunction<typeof fetch>)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ TrainTimetables: [] })
-        } as Response);
+      // Setup API sequence with no trains
+      TDXMockHelper.setupNoTrainsSequence();
 
       const result = await server['handleSearchTrains']('台北到台中');
       
@@ -336,20 +339,8 @@ describe('Stage 6: search_trains Tool', () => {
 
   describe('Data Availability Handling', () => {
     test('should provide detailed error message when no trains found', async () => {
-      // Mock complete setup: auth token, station data, then empty timetable
-      (fetch as jest.MockedFunction<typeof fetch>)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockStationData
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ TrainTimetables: [] })
-        } as Response);
+      // Setup API sequence with no trains
+      TDXMockHelper.setupNoTrainsSequence();
 
       const result = await server['handleSearchTrains']('台北到台中');
       
@@ -478,60 +469,21 @@ describe('Stage 6: search_trains Tool', () => {
   });
 
   describe('Fare Integration', () => {
-    beforeEach(() => {
-      (fetch as jest.MockedFunction<typeof fetch>)
-        .mockResolvedValue({
-          ok: true,
-          json: async () => ({ TrainTimetables: mockTrainData })
-        } as Response);
-    });
-
     test('should fetch fare data successfully', async () => {
-      // Mock fare API response
-      (fetch as jest.MockedFunction<typeof fetch>)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockStationData
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ TrainTimetables: mockTrainData })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockFareData
-        } as Response);
+      // Setup complete API sequence with fare data
+      TDXMockHelper.setupFullApiSequence();
 
       const result = await server['handleSearchTrains']('台北到台中');
       
+      expect(result.content[0].text).toContain('🚄 **Train Search Results**');
       expect(result.content[0].text).toContain('**票價資訊:**');
       expect(result.content[0].text).toContain('全票: $375');
       expect(result.content[0].text).toContain('兒童票: $188');
     });
 
     test('should handle missing fare data gracefully', async () => {
-      // Mock fare API returning empty data
-      (fetch as jest.MockedFunction<typeof fetch>)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockStationData
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ TrainTimetables: mockTrainData })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => []
-        } as Response);
+      // Setup API sequence without fare data (empty fares)
+      TDXMockHelper.setupFullApiSequence({ fares: [] });
 
       const result = await server['handleSearchTrains']('台北到台中');
       
@@ -541,25 +493,8 @@ describe('Stage 6: search_trains Tool', () => {
     });
 
     test('should handle fare API errors gracefully', async () => {
-      // Mock fare API error
-      (fetch as jest.MockedFunction<typeof fetch>)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockStationData
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ TrainTimetables: mockTrainData })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: false,
-          status: 404,
-          statusText: 'Not Found'
-        } as Response);
+      // Setup API error for fare step
+      TDXMockHelper.setupApiErrorSequence('fare');
 
       const result = await server['handleSearchTrains']('台北到台中');
       
@@ -569,24 +504,8 @@ describe('Stage 6: search_trains Tool', () => {
     });
 
     test('should include fare info in machine-readable data', async () => {
-      // Mock fare API response
-      (fetch as jest.MockedFunction<typeof fetch>)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockStationData
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ TrainTimetables: mockTrainData })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockFareData
-        } as Response);
+      // Setup complete API sequence with fare data
+      TDXMockHelper.setupFullApiSequence();
 
       const result = await server['handleSearchTrains']('台北到台中');
       
@@ -599,11 +518,17 @@ describe('Stage 6: search_trains Tool', () => {
 
   describe('Performance', () => {
     test('should handle multiple rapid requests', async () => {
-      (fetch as jest.MockedFunction<typeof fetch>)
-        .mockResolvedValue({
-          ok: true,
-          json: async () => ({ TrainTimetables: mockTrainData })
-        } as Response);
+      // Setup multiple complete API sequences for concurrent requests
+      const fetchMock = global.fetch as jest.MockedFunction<typeof fetch>;
+      fetchMock.mockReset();
+      
+      // Mock multiple sequences (Token, Station, Train for each request)
+      for (let i = 0; i < 5; i++) {
+        fetchMock
+          .mockResolvedValueOnce({ ok: true, json: async () => TDXMockHelper.defaultToken } as Response)
+          .mockResolvedValueOnce({ ok: true, json: async () => TDXMockHelper.defaultStations } as Response)
+          .mockResolvedValueOnce({ ok: true, json: async () => ({ TrainTimetables: TDXMockHelper.defaultTrains }) } as Response);
+      }
 
       const promises = Array.from({ length: 5 }, () => 
         server['handleSearchTrains']('台北到台中')

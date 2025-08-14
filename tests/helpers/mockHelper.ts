@@ -362,4 +362,23 @@ export class TDXMockHelper {
   static async waitForServerInitialization(timeoutMs: number = 500): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, timeoutMs));
   }
+
+  /**
+   * Get default test data for custom mock setups
+   */
+  static get defaultToken(): MockTokenResponse {
+    return this.DEFAULT_TOKEN;
+  }
+
+  static get defaultStations(): MockStationData[] {
+    return this.DEFAULT_STATIONS;
+  }
+
+  static get defaultTrains(): MockTrainData[] {
+    return this.DEFAULT_TRAINS;
+  }
+
+  static get defaultFares(): MockFareData[] {
+    return this.DEFAULT_FARES;
+  }
 }
