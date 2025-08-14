@@ -6,11 +6,18 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import * as dotenv from 'dotenv';
 import { QueryParser, ParsedQuery } from './query-parser.js';
 
-// Load environment variables silently without dotenv to avoid stdout pollution
-// For MCP servers, env vars should be set by the host (Claude Desktop)
-// If needed, they can be loaded manually without console output
+// Load environment variables - needed for TDX API credentials
+// Redirect console output temporarily to prevent stdout pollution
+const originalConsoleLog = console.log;
+console.log = () => {}; // Temporarily silence console.log
+try {
+  dotenv.config();
+} finally {
+  console.log = originalConsoleLog; // Restore console.log
+}
 
 // Utility function to check if running in test environment
 function isTestEnvironment(): boolean {
@@ -376,7 +383,19 @@ class SmartTRAServer {
     const authUrl = process.env.TDX_AUTH_URL || 'https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token';
 
     if (!clientId || !clientSecret) {
-      throw new Error('TDX credentials not configured. Please set TDX_CLIENT_ID and TDX_CLIENT_SECRET environment variables.');
+      const missingVars = [];
+      if (!clientId) missingVars.push('TDX_CLIENT_ID');
+      if (!clientSecret) missingVars.push('TDX_CLIENT_SECRET');
+      
+      throw new Error(
+        `TDX credentials not configured. Missing: ${missingVars.join(', ')}\n\n` +
+        `Please:\n` +
+        `1. Create a .env file in the project root\n` +
+        `2. Add your TDX API credentials:\n` +
+        `   TDX_CLIENT_ID=your_client_id\n` +
+        `   TDX_CLIENT_SECRET=your_client_secret\n\n` +
+        `Get credentials from: https://tdx.transportdata.tw/`
+      );
     }
 
     const body = new URLSearchParams({

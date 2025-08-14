@@ -26,7 +26,8 @@
       "Bash(rm:*)",
       "Bash(git push:*)",
       "Bash(git commit:*)",
-      "Bash(timeout:*)"
+      "Bash(timeout:*)",
+      "Bash(touch:*)"
     ],
     "deny": []
   }
