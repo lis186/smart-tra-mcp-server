@@ -9,6 +9,21 @@ import {
 import * as dotenv from 'dotenv';
 import { QueryParser, ParsedQuery } from './query-parser.js';
 
+// Constants
+const MONTHLY_PASS_TRAIN_TYPES = {
+  LOCAL: '10',      // 區間車
+  FAST_LOCAL: '11'  // 區間快車
+} as const;
+
+const API_CONFIG = {
+  TOKEN_CACHE_DURATION: 24 * 60 * 60 * 1000, // 24 hours in milliseconds  
+  TOKEN_SAFETY_BUFFER: 5 * 60 * 1000,       // 5 minutes in milliseconds
+  RATE_LIMIT_WINDOW: 60 * 1000,             // 1 minute in milliseconds
+  MAX_REQUESTS_PER_WINDOW: 50,
+  MAX_QUERY_LENGTH: 500,
+  MAX_CONTEXT_LENGTH: 200
+} as const;
+
 // Load environment variables - needed for TDX API credentials
 // Redirect console output temporarily to prevent stdout pollution
 const originalConsoleLog = console.log;
@@ -205,10 +220,10 @@ class SmartTRAServer {
   private lastRateLimitCleanup = Date.now();
   
   // Security limits
-  private readonly MAX_QUERY_LENGTH = 1000;
-  private readonly MAX_CONTEXT_LENGTH = 500;
-  private readonly RATE_LIMIT_WINDOW = 60000; // 1 minute
-  private readonly RATE_LIMIT_MAX_REQUESTS = 30; // 30 requests per minute
+  private readonly MAX_QUERY_LENGTH = API_CONFIG.MAX_QUERY_LENGTH;
+  private readonly MAX_CONTEXT_LENGTH = API_CONFIG.MAX_CONTEXT_LENGTH;
+  private readonly RATE_LIMIT_WINDOW = API_CONFIG.RATE_LIMIT_WINDOW;
+  private readonly RATE_LIMIT_MAX_REQUESTS = API_CONFIG.MAX_REQUESTS_PER_WINDOW;
   private readonly GRACEFUL_SHUTDOWN_TIMEOUT = 5000; // 5 seconds
 
   constructor() {
@@ -566,8 +581,8 @@ class SmartTRAServer {
       const stops = Math.abs(destinationIndex - originIndex) - 1; // Exclude origin and destination
       
       // Check if eligible for monthly pass (區間車, 區間快車)
-      const monthlyPassTrainTypes = ['10', '11']; // 區間車 (10), 區間快車 (11)
-      const isMonthlyPassEligible = monthlyPassTrainTypes.includes(train.TrainInfo.TrainTypeCode);
+      const monthlyPassTrainTypes = [MONTHLY_PASS_TRAIN_TYPES.LOCAL, MONTHLY_PASS_TRAIN_TYPES.FAST_LOCAL] as const;
+      const isMonthlyPassEligible = monthlyPassTrainTypes.includes(train.TrainInfo.TrainTypeCode as typeof monthlyPassTrainTypes[number]);
       
       results.push({
         trainNo: train.TrainInfo.TrainNo,
@@ -1414,7 +1429,7 @@ class SmartTRAServer {
     if (originResults.length === 0) {
       return {
         valid: false,
-        message: `Cannot find origin station "${parsed.origin}". Try using full station names like "臺北" or "台中".`
+        message: `找不到出發車站 "${parsed.origin}"，請使用完整站名如「臺北」或「台中」`
       };
     }
 
@@ -1423,7 +1438,7 @@ class SmartTRAServer {
     if (destinationResults.length === 0) {
       return {
         valid: false,
-        message: `Cannot find destination station "${parsed.destination}". Try using full station names like "臺北" or "台中".`
+        message: `找不到目的車站 "${parsed.destination}"，請使用完整站名如「臺北」或「台中」`
       };
     }
 
