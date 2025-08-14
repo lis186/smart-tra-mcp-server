@@ -76,24 +76,57 @@ interface TRATrainTimetableStop {
 }
 
 interface TRATrainTimetable {
-  TrainNo: string;
-  RouteID: string;
-  Direction: number;
-  TrainClassificationID: string;
-  TrainTypeID: string;
-  TrainTypeName: { Zh_tw: string; En: string };
-  StartingStationID: string;
-  StartingStationName: { Zh_tw: string; En: string };
-  EndingStationID: string;
-  EndingStationName: { Zh_tw: string; En: string };
-  TripLine: number;
-  WheelChairFlag: number;
-  PackageServiceFlag: number;
-  DiningFlag: number;
-  BreastFeedFlag: number;
-  BikeFlag: number;
+  TrainInfo: {
+    TrainNo: string;
+    Direction: number;
+    TrainTypeID: string;
+    TrainTypeCode: string;
+    TrainTypeName: { Zh_tw: string; En: string };
+    TripHeadSign: string;
+    StartingStationID: string;
+    StartingStationName: { Zh_tw: string; En: string };
+    EndingStationID: string;
+    EndingStationName: { Zh_tw: string; En: string };
+    TripLine: number;
+    WheelChairFlag: number;
+    PackageServiceFlag: number;
+    DiningFlag: number;
+    BreastFeedFlag: number;
+    BikeFlag: number;
+    CarFlag: number;
+    DailyFlag: number;
+    ExtraTrainFlag: number;
+    SuspendedFlag: number;
+    Note?: string;
+  };
+  StopTimes: Array<{
+    StopSequence: number;
+    StationID: string;
+    StationName: { Zh_tw: string; En: string };
+    ArrivalTime: string;
+    DepartureTime: string;
+    SuspendedFlag: number;
+  }>;
+}
+
+// v3 API response wrappers
+interface TDXDateRangeResponse {
+  UpdateTime: string;
+  UpdateInterval: number;
+  AuthorityCode: string;
+  StartDate: string;
+  EndDate: string;
+  TrainDates: string[];
+  Count: number;
+}
+
+interface TDXTrainTimetableResponse {
+  UpdateTime: string;
+  UpdateInterval: number;
+  SrcUpdateTime?: string;
+  SrcUpdateInterval?: number;
   TrainDate: string;
-  StopTimes: TRATrainTimetableStop[];
+  TrainTimetables: TRATrainTimetable[];
 }
 
 // TDX API fare response structure
@@ -436,29 +469,39 @@ class SmartTRAServer {
       const token = await this.getAccessToken();
       const baseUrl = process.env.TDX_BASE_URL || 'https://tdx.transportdata.tw/api/basic';
       
+      // First, check available date range from v3 API
+      const dateRangeResponse = await fetch(`${baseUrl}/v3/Rail/TRA/DailyTrainTimetable/TrainDates?%24format=JSON`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json'
+        }
+      });
+      
+      if (!dateRangeResponse.ok) {
+        throw new Error(`Failed to fetch available dates: ${dateRangeResponse.status}`);
+      }
+      
+      const dateRange = await dateRangeResponse.json() as TDXDateRangeResponse;
+      const availableDates = dateRange.TrainDates || [];
+      
       // Use today if no date specified, or validate requested date
       let date = trainDate || new Date().toISOString().split('T')[0];
       
-      // TDX API typically has limited date range (usually current date +/- few days)
-      // If requested date is too far in future, fall back to today
-      if (trainDate) {
-        const requestedDate = new Date(trainDate);
-        const today = new Date();
-        const maxDaysAhead = 7; // TDX usually provides ~7 days ahead
-        const daysDifference = (requestedDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24);
+      // Validate date is within available range
+      if (trainDate && !availableDates.includes(trainDate)) {
+        console.error(`Requested date ${trainDate} is not available in TDX data. Available dates: ${dateRange.StartDate} to ${dateRange.EndDate}`);
+        date = new Date().toISOString().split('T')[0];
         
-        if (daysDifference > maxDaysAhead || daysDifference < -1) {
-          console.error(`Requested date ${trainDate} is outside TDX data range, using today's date`);
-          date = today.toISOString().split('T')[0];
+        // Double-check today is available, otherwise use first available date
+        if (!availableDates.includes(date) && availableDates.length > 0) {
+          date = availableDates[0];
+          console.error(`Using first available date: ${date}`);
         }
       }
       
-      // Use the OD (Origin-Destination) endpoint for efficient filtering
-      // For today's date, use the Today endpoint which is more reliable
-      const isToday = date === new Date().toISOString().split('T')[0];
-      const endpoint = isToday 
-        ? `/v2/Rail/TRA/DailyTrainTimetable/Today/OD/${originStationId}/to/${destinationStationId}`
-        : `/v2/Rail/TRA/DailyTrainTimetable/OD/${originStationId}/to/${destinationStationId}/${date}`;
+      // Use v3 API endpoints for better data availability  
+      // Always use the date format - "Today" endpoint doesn't work for OD queries
+      const endpoint = `/v3/Rail/TRA/DailyTrainTimetable/OD/${originStationId}/to/${destinationStationId}/${date}`;
       
       const response = await fetch(`${baseUrl}${endpoint}?%24format=JSON`, {
         headers: {
@@ -476,7 +519,10 @@ class SmartTRAServer {
         throw new Error(`Failed to fetch train timetable: ${response.status} ${response.statusText}`);
       }
 
-      const data = await response.json() as TRATrainTimetable[];
+      const responseData = await response.json() as TDXTrainTimetableResponse;
+      
+      // v3 API returns wrapped data structure
+      const data = responseData.TrainTimetables || [];
       
       // Handle data availability scenarios
       if (!data || data.length === 0) {
@@ -484,7 +530,7 @@ class SmartTRAServer {
         console.error('This could happen if:');
         console.error('- No trains run on this route on the specified date');
         console.error('- Trains are suspended due to maintenance or weather');
-        console.error('- Date is outside of available timetable data');
+        console.error('- Route does not exist or station IDs are incorrect');
         return [];
       }
       
@@ -521,11 +567,11 @@ class SmartTRAServer {
       
       // Check if eligible for monthly pass (區間車, 區間快車)
       const monthlyPassTrainTypes = ['10', '11']; // 區間車 (10), 區間快車 (11)
-      const isMonthlyPassEligible = monthlyPassTrainTypes.includes(train.TrainTypeID);
+      const isMonthlyPassEligible = monthlyPassTrainTypes.includes(train.TrainInfo.TrainTypeCode);
       
       results.push({
-        trainNo: train.TrainNo,
-        trainType: train.TrainTypeName.Zh_tw,
+        trainNo: train.TrainInfo.TrainNo,
+        trainType: train.TrainInfo.TrainTypeName.Zh_tw,
         origin: originStop.StationName.Zh_tw,
         destination: destinationStop.StationName.Zh_tw,
         departureTime,
@@ -1217,9 +1263,6 @@ class SmartTRAServer {
         };
       }
 
-      // Check if date was adjusted due to TDX API limitations
-      const wasDateAdjusted = parsed.date && parsed.date !== timetableData[0]?.TrainDate;
-      
       // Process and filter results
       const trainResults = this.processTrainSearchResults(timetableData, originStation.stationId, destinationStation.stationId);
       
@@ -1243,11 +1286,6 @@ class SmartTRAServer {
       responseText += `**Date:** ${parsed.date || 'Today'}\n`;
       if (parsed.time) {
         responseText += `**Target Time:** ${parsed.time}\n`;
-      }
-      
-      // Add notification if date was adjusted
-      if (wasDateAdjusted) {
-        responseText += `⚠️ **Date Adjusted**: Requested date outside TDX data range, showing today's schedule\n`;
       }
       
       responseText += `**Found:** ${filteredResults.length} trains (${timetableData.length} total)\n\n`;
