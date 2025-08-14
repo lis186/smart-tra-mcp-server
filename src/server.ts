@@ -9,10 +9,12 @@ import {
 import * as dotenv from 'dotenv';
 import { QueryParser, ParsedQuery } from './query-parser.js';
 
-// Constants
-const MONTHLY_PASS_TRAIN_TYPES = {
-  LOCAL: '10',      // 區間車
-  FAST_LOCAL: '11'  // 區間快車
+// Constants - TPASS (Monthly Pass) Restriction Logic
+// Based on TRA official policy: TPASS cannot be used on TrainTypeCode 1, 2, 11
+const TPASS_RESTRICTED_TRAIN_TYPES = {
+  TAROKO: '1',      // 太魯閣
+  PUYUMA: '2',      // 普悠瑪
+  EMU3000: '11'     // 新自強 (EMU3000)
 } as const;
 
 const API_CONFIG = {
@@ -582,9 +584,14 @@ class SmartTRAServer {
       const destinationSequence = destinationStop.StopSequence;
       const stops = Math.abs(destinationSequence - originSequence) - 1; // Exclude origin and destination
       
-      // Check if eligible for monthly pass (區間車, 區間快車)
-      const monthlyPassTrainTypes = [MONTHLY_PASS_TRAIN_TYPES.LOCAL, MONTHLY_PASS_TRAIN_TYPES.FAST_LOCAL] as const;
-      const isMonthlyPassEligible = monthlyPassTrainTypes.includes(train.TrainInfo.TrainTypeCode as typeof monthlyPassTrainTypes[number]);
+      // Check if eligible for monthly pass - TPASS restriction logic
+      // TPASS NOT allowed on: 太魯閣 (1), 普悠瑪 (2), 新自強/EMU3000 (11)
+      const trainTypeCode = train.TrainInfo.TrainTypeCode;
+      const isMonthlyPassEligible = !(
+        trainTypeCode === TPASS_RESTRICTED_TRAIN_TYPES.TAROKO ||
+        trainTypeCode === TPASS_RESTRICTED_TRAIN_TYPES.PUYUMA ||
+        trainTypeCode === TPASS_RESTRICTED_TRAIN_TYPES.EMU3000
+      );
       
       results.push({
         trainNo: train.TrainInfo.TrainNo,
