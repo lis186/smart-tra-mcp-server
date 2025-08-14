@@ -3,8 +3,8 @@ export default {
   preset: 'ts-jest/presets/default-esm',
   extensionsToTreatAsEsm: ['.ts'],
   testMatch: [
-    'tests/**/*.test.ts',
-    'src/**/*.test.ts'
+    '<rootDir>/tests/**/*.test.ts',
+    '<rootDir>/src/**/*.test.ts'
   ],
   setupFilesAfterEnv: ['<rootDir>/tests/setup.ts'],
   transform: {

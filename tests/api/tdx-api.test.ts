@@ -37,7 +37,7 @@ describe('TDX API Integration Tests', () => {
     });
 
     if (response.ok) {
-      const tokenData = await response.json();
+      const tokenData = await response.json() as { access_token: string };
       accessToken = tokenData.access_token;
     }
   }, 30000);
@@ -73,7 +73,7 @@ describe('TDX API Integration Tests', () => {
 
       expect(response.status).toBe(200);
       
-      const data = await response.json();
+      const data = await response.json() as { TrainDates: string[] };
       expect(data).toHaveProperty('TrainDates');
       expect(Array.isArray(data.TrainDates)).toBe(true);
       expect(data.TrainDates.length).toBeGreaterThan(0);

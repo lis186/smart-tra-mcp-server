@@ -37,7 +37,7 @@ describe('Chinese Character Encoding', () => {
       expect(result.destination).toBe('台中');
       expect(result.time).toBe('08:00');
       expect(result.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-      expect(result.preferences?.trainType).toBe('自強號');
+      expect(result.preferences?.trainType).toBe('自強');
     });
   });
 

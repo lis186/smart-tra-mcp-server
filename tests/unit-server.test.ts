@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach } from '@jest/globals';
-import { QueryParser } from './query-parser.js';
+import { QueryParser } from '../src/query-parser.js';
 
 describe('QueryParser', () => {
   let parser: QueryParser;
