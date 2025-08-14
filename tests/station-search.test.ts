@@ -256,12 +256,12 @@ describe('Rate Limiting Memory Management', () => {
   test('should not exceed rate limits', () => {
     const clientId = 'test_client';
     
-    // Make requests up to the limit
-    for (let i = 0; i < 30; i++) {
+    // Make requests up to the limit (TDX: 5 requests per minute)
+    for (let i = 0; i < 5; i++) {
       expect(() => server.checkRateLimitForTest(clientId)).not.toThrow();
     }
     
-    // The 31st request should throw
+    // The 6th request should throw
     expect(() => server.checkRateLimitForTest(clientId)).toThrow('Rate limit exceeded');
   });
 });

@@ -19,7 +19,7 @@ const API_CONFIG = {
   TOKEN_CACHE_DURATION: 24 * 60 * 60 * 1000, // 24 hours in milliseconds  
   TOKEN_SAFETY_BUFFER: 5 * 60 * 1000,       // 5 minutes in milliseconds
   RATE_LIMIT_WINDOW: 60 * 1000,             // 1 minute in milliseconds
-  MAX_REQUESTS_PER_WINDOW: 50,
+  MAX_REQUESTS_PER_WINDOW: 5,                // TDX limit: 5 requests per minute
   MAX_QUERY_LENGTH: 500,
   MAX_CONTEXT_LENGTH: 200
 } as const;

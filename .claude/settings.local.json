@@ -27,7 +27,10 @@
       "Bash(git push:*)",
       "Bash(git commit:*)",
       "Bash(timeout:*)",
-      "Bash(touch:*)"
+      "Bash(touch:*)",
+      "Bash(npm start)",
+      "Bash(npx jest:*)",
+      "Bash(git rm:*)"
     ],
     "deny": []
   }
