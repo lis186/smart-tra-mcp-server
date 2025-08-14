@@ -294,7 +294,7 @@
 **Goal**: Second MCP tool for train schedules
 **Success Criteria**: Can search basic train timetables
 **Tests**: "台北到台中" returns train list
-**Status**: Not Started
+**Status**: ✅ Complete
 
 ### Tasks (Build on Working Foundation)
 
@@ -329,7 +329,22 @@
 - Response times acceptable (<2s)
 - Works reliably in Claude Desktop
 
-**MVP Decision Point**: If search_station + search_trains both work, have viable MVP. Consider deployment before adding third tool
+**Implementation Results**:
+
+- ✅ Successfully integrated TDX Daily Train Timetable API
+- ✅ Origin-Destination (OD) endpoint for efficient route filtering
+- ✅ Train search logic with station validation and time calculation
+- ✅ Monthly pass filtering (區間車, 區間快車) with commuter defaults
+- ✅ Comprehensive train data processing (travel time, stops, schedules)
+- ✅ Real-time timetable data from TDX production API
+- ✅ **Fare/Pricing Integration** (TDX OD Fare API with all ticket types)
+- ✅ **Enhanced Response Format** (pricing display in train listings)
+- ✅ **Data Availability Handling** (graceful degradation when trains not running)
+- ✅ Robust error handling for API failures and invalid routes
+- ✅ Machine-readable JSON output with fare information
+- ✅ MCP tool fully functional with natural language queries
+
+**Key Decision Point**: ✅ search_station + search_trains both working with complete fare integration - MVP ready for deployment
 
 ---
 

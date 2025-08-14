@@ -7,10 +7,31 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import * as dotenv from 'dotenv';
-import { QueryParser, ParsedQuery } from './query-parser.js';
+import { QueryParser, ParsedQuery } from './query-parser';
 
 // Load environment variables
 dotenv.config();
+
+// Utility function to check if running in test environment
+function isTestEnvironment(): boolean {
+  return process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID !== undefined;
+}
+
+// Fare calculation configuration
+// Based on TRA official rules: https://www.railway.gov.tw/tra-tip-web/tip
+interface FareRules {
+  child: number;    // 兒童票: 成人票價半數
+  senior: number;   // 敬老愛心票: 成人票價半數
+  disabled: number; // 愛心票: 成人票價半數
+  roundingMethod: 'round' | 'floor' | 'ceil'; // 四捨五入方式
+}
+
+const DEFAULT_FARE_RULES: FareRules = {
+  child: 0.5,     // 50% of adult fare
+  senior: 0.5,    // 50% of adult fare
+  disabled: 0.5,  // 50% of adult fare
+  roundingMethod: 'round' // 四捨五入
+};
 
 // TDX API Types
 interface TokenResponse {
@@ -37,6 +58,84 @@ interface StationSearchResult {
   confidence: number;
   address?: string;
   coordinates?: { lat: number; lon: number };
+}
+
+interface TRATrainTimetableStop {
+  StationID: string;
+  StationName: { Zh_tw: string; En: string };
+  ArrivalTime: string;
+  DepartureTime: string;
+  StopTime: number;
+}
+
+interface TRATrainTimetable {
+  TrainNo: string;
+  RouteID: string;
+  Direction: number;
+  TrainClassificationID: string;
+  TrainTypeID: string;
+  TrainTypeName: { Zh_tw: string; En: string };
+  StartingStationID: string;
+  StartingStationName: { Zh_tw: string; En: string };
+  EndingStationID: string;
+  EndingStationName: { Zh_tw: string; En: string };
+  TripLine: number;
+  WheelChairFlag: number;
+  PackageServiceFlag: number;
+  DiningFlag: number;
+  BreastFeedFlag: number;
+  BikeFlag: number;
+  TrainDate: string;
+  StopTimes: TRATrainTimetableStop[];
+}
+
+// TDX API fare response structure
+interface TDXFareResponse {
+  OriginStationID: string;
+  OriginStationName: {
+    Zh_tw: string;
+    En: string;
+  };
+  DestinationStationID: string;
+  DestinationStationName: {
+    Zh_tw: string;
+    En: string;
+  };
+  Direction: number;
+  Fares: TDXFareDetail[];
+}
+
+interface TDXFareDetail {
+  TicketType: string;
+  FareClass: string;
+  CabinClass?: string;
+  Price: number;
+}
+
+interface FareInfo {
+  adult: number;
+  child: number;
+  senior: number;
+  disabled: number;
+  currency: string;
+}
+
+interface TrainSearchResult {
+  trainNo: string;
+  trainType: string;
+  origin: string;
+  destination: string;
+  departureTime: string;
+  arrivalTime: string;
+  travelTime: string;
+  isMonthlyPassEligible: boolean;
+  stops: number;
+  minutesUntilDeparture?: number;
+  isLate?: boolean;
+  hasLeft?: boolean;
+  lateWarning?: string;
+  isBackupOption?: boolean;
+  fareInfo?: FareInfo;
 }
 
 class SmartTRAServer {
@@ -310,6 +409,377 @@ class SmartTRAServer {
     
     console.log('TDX access token obtained successfully');
     return tokenData.access_token;
+  }
+
+  // Call TDX Daily Train Timetable API with data availability handling
+  private async getDailyTrainTimetable(originStationId: string, destinationStationId: string, trainDate?: string): Promise<TRATrainTimetable[]> {
+    try {
+      const token = await this.getAccessToken();
+      const baseUrl = process.env.TDX_BASE_URL || 'https://tdx.transportdata.tw/api/basic';
+      
+      // Use today if no date specified
+      const date = trainDate || new Date().toISOString().split('T')[0];
+      
+      // Use the OD (Origin-Destination) endpoint for efficient filtering
+      const endpoint = `/v2/Rail/TRA/DailyTrainTimetable/OD/${originStationId}/to/${destinationStationId}/${date}`;
+      
+      const response = await fetch(`${baseUrl}${endpoint}?%24format=JSON`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        // Handle common API failure scenarios
+        if (response.status === 404) {
+          console.log(`No timetable data found for route ${originStationId} → ${destinationStationId} on ${date}`);
+          return []; // Return empty array for no data found
+        }
+        throw new Error(`Failed to fetch train timetable: ${response.status} ${response.statusText}`);
+      }
+
+      const data = await response.json() as TRATrainTimetable[];
+      
+      // Handle data availability scenarios
+      if (!data || data.length === 0) {
+        console.log(`No trains available for route ${originStationId} → ${destinationStationId} on ${date}`);
+        console.log('This could happen if:');
+        console.log('- No trains run on this route on the specified date');
+        console.log('- Trains are suspended due to maintenance or weather');
+        console.log('- Date is outside of available timetable data');
+        return [];
+      }
+      
+      console.log(`Retrieved ${data.length} trains for ${originStationId} → ${destinationStationId} on ${date}`);
+      return data;
+    } catch (error) {
+      console.error('Error fetching train timetable:', error);
+      throw error;
+    }
+  }
+
+  // Process train timetable data for search results
+  private processTrainSearchResults(trains: TRATrainTimetable[], originStationId: string, destinationStationId: string): TrainSearchResult[] {
+    const results: TrainSearchResult[] = [];
+    
+    for (const train of trains) {
+      // Find origin and destination stops
+      const originStop = train.StopTimes.find(stop => stop.StationID === originStationId);
+      const destinationStop = train.StopTimes.find(stop => stop.StationID === destinationStationId);
+      
+      if (!originStop || !destinationStop) {
+        continue; // Skip trains that don't stop at both stations
+      }
+      
+      // Calculate travel time
+      const departureTime = originStop.DepartureTime || originStop.ArrivalTime;
+      const arrivalTime = destinationStop.ArrivalTime || destinationStop.DepartureTime;
+      const travelTime = this.calculateTravelTime(departureTime, arrivalTime);
+      
+      // Count intermediate stops
+      const originIndex = train.StopTimes.findIndex(stop => stop.StationID === originStationId);
+      const destinationIndex = train.StopTimes.findIndex(stop => stop.StationID === destinationStationId);
+      const stops = Math.abs(destinationIndex - originIndex) - 1; // Exclude origin and destination
+      
+      // Check if eligible for monthly pass (區間車, 區間快車)
+      const monthlyPassTrainTypes = ['10', '11']; // 區間車 (10), 區間快車 (11)
+      const isMonthlyPassEligible = monthlyPassTrainTypes.includes(train.TrainTypeID);
+      
+      results.push({
+        trainNo: train.TrainNo,
+        trainType: train.TrainTypeName.Zh_tw,
+        origin: originStop.StationName.Zh_tw,
+        destination: destinationStop.StationName.Zh_tw,
+        departureTime,
+        arrivalTime,
+        travelTime,
+        isMonthlyPassEligible,
+        stops
+      });
+    }
+    
+    return results;
+  }
+
+  // Calculate travel time between two time strings
+  private calculateTravelTime(departureTime: string, arrivalTime: string): string {
+    try {
+      const departure = new Date(`1970-01-01T${departureTime}`);
+      const arrival = new Date(`1970-01-01T${arrivalTime}`);
+      
+      // Handle next-day arrivals
+      if (arrival < departure) {
+        arrival.setDate(arrival.getDate() + 1);
+      }
+      
+      const diffMs = arrival.getTime() - departure.getTime();
+      const hours = Math.floor(diffMs / (1000 * 60 * 60));
+      const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+      
+      if (hours === 0) {
+        return `${minutes}分`;
+      } else {
+        return `${hours}小時${minutes}分`;
+      }
+    } catch (error) {
+      return '未知';
+    }
+  }
+
+  // Get fare information between two stations
+  private async getODFare(originStationId: string, destinationStationId: string): Promise<FareInfo | null> {
+    try {
+      const token = await this.getAccessToken();
+      const baseUrl = process.env.TDX_BASE_URL || 'https://tdx.transportdata.tw/api/basic';
+      
+      // Use the OD (Origin-Destination) fare endpoint
+      const endpoint = `/v3/Rail/TRA/ODFare/${originStationId}/to/${destinationStationId}`;
+      
+      const response = await fetch(`${baseUrl}${endpoint}?%24format=JSON`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        console.log(`Fare data not available for route ${originStationId} → ${destinationStationId} (${response.status})`);
+        return null;
+      }
+
+      const fareData = await response.json() as TDXFareResponse[];
+      
+      if (!Array.isArray(fareData) || fareData.length === 0) {
+        console.log(`No fare data found for route ${originStationId} → ${destinationStationId}`);
+        return null;
+      }
+
+      // Process fare data to extract common ticket types
+      const fareInfo = this.processFareData(fareData[0]);
+      console.log(`Retrieved fare data for ${originStationId} → ${destinationStationId}`);
+      return fareInfo;
+    } catch (error) {
+      console.log(`Failed to get fare data for ${originStationId} → ${destinationStationId}:`, error instanceof Error ? error.message : String(error));
+      return null; // Graceful fallback
+    }
+  }
+
+  /**
+   * Process TDX fare response into structured fare information
+   * 
+   * TRA Fare Rules (台鐵票價規則):
+   * - 成人票: 按乘車區間營業里程乘票價率計算
+   * - 兒童票: 未滿12歲，滿115公分未滿150公分，票價按成人票價半數四捨五入
+   * - 敬老愛心票: 年滿65歲或身心障礙者，票價按成人票價半數四捨五入
+   * - 愛心陪伴票: 身心障礙者的必要陪伴者一人享有優惠
+   */
+  private processFareData(fareResponse: TDXFareResponse): FareInfo {
+    const fareInfo: FareInfo = {
+      adult: 0,
+      child: 0,
+      senior: 0,
+      disabled: 0,
+      currency: 'TWD'
+    };
+
+    // Map TDX ticket types to our structure
+    for (const fare of fareResponse.Fares) {
+      const price = fare.Price;
+      
+      switch (fare.TicketType) {
+        case '全票':
+        case 'Adult':
+          fareInfo.adult = price;
+          break;
+        case '兒童票':  // Standard term for child ticket
+        case '孩童票':  // Alternative term sometimes used
+        case 'Child':
+          fareInfo.child = price;
+          break;
+        case '敬老愛心票':  // Standard combined term
+        case '敬老票':  // Senior ticket
+        case '老人票':  // Alternative senior term
+        case 'Senior':
+          fareInfo.senior = price;
+          break;
+        case '愛心票':  // Disability discount ticket
+        case '愛心陪伴票':  // Companion ticket for disabled
+        case '身心障礙票':
+        case 'Disabled':
+          fareInfo.disabled = price;
+          break;
+        default:
+          // If we don't have adult fare yet, use the first fare as adult
+          if (fareInfo.adult === 0) {
+            fareInfo.adult = price;
+          }
+      }
+    }
+
+    // If we only have adult fare, calculate others based on configurable fare rules
+    // Load fare rules from environment or use defaults
+    const fareRules = this.getFareRules();
+    
+    if (fareInfo.adult > 0) {
+      const roundFn = this.getRoundingFunction(fareRules.roundingMethod);
+      
+      if (fareInfo.child === 0) {
+        fareInfo.child = roundFn(fareInfo.adult * fareRules.child); // 兒童票: 成人票價 * 配置比例
+      }
+      if (fareInfo.senior === 0) {
+        fareInfo.senior = roundFn(fareInfo.adult * fareRules.senior); // 敬老愛心票: 成人票價 * 配置比例
+      }
+      if (fareInfo.disabled === 0) {
+        fareInfo.disabled = roundFn(fareInfo.adult * fareRules.disabled); // 愛心票: 成人票價 * 配置比例
+      }
+    }
+
+    return fareInfo;
+  }
+
+  // Attempt to get live delay data (optional enhancement when available)
+  private async tryGetLiveDelayData(stationId: string): Promise<any[]> {
+    try {
+      const token = await this.getAccessToken();
+      const baseUrl = process.env.TDX_BASE_URL || 'https://tdx.transportdata.tw/api/basic';
+      
+      const response = await fetch(`${baseUrl}/v3/Rail/TRA/StationLiveBoard/Station/${stationId}?%24format=JSON&%24top=20`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        console.log(`Live data not available for station ${stationId} (${response.status})`);
+        return [];
+      }
+
+      const liveData = await response.json() as any[];
+      
+      if (!Array.isArray(liveData) || liveData.length === 0) {
+        console.log(`No live trains found for station ${stationId} - trains may not be running`);
+        return [];
+      }
+      
+      console.log(`Found ${liveData.length} live trains for station ${stationId}`);
+      return liveData;
+    } catch (error) {
+      console.log(`Failed to get live data for station ${stationId}:`, error instanceof Error ? error.message : String(error));
+      return []; // Graceful fallback - return empty array
+    }
+  }
+
+  // Filter trains based on commuter preferences
+  private filterCommuterTrains(trains: TrainSearchResult[], preferences?: any): TrainSearchResult[] {
+    let filtered = [...trains];
+    
+    // Default: Filter to monthly pass eligible trains only
+    if (!preferences?.includeAllTrainTypes) {
+      filtered = filtered.filter(train => train.isMonthlyPassEligible);
+    }
+    
+    // Apply time window filtering (next 2 hours by default for commuters)
+    const now = new Date();
+    const timeWindowHours = preferences?.timeWindowHours || 2;
+    const maxTime = new Date(now.getTime() + timeWindowHours * 60 * 60 * 1000);
+    
+    filtered = filtered.filter(train => {
+      const trainTime = this.parseTrainTime(train.departureTime);
+      return trainTime >= now && trainTime <= maxTime;
+    });
+    
+    // Add late indicators and status
+    filtered = filtered.map(train => {
+      const trainTime = this.parseTrainTime(train.departureTime);
+      const minutesUntilDeparture = Math.round((trainTime.getTime() - now.getTime()) / (1000 * 60));
+      
+      // Add late warning if departure is very soon
+      const isLate = minutesUntilDeparture <= 15 && minutesUntilDeparture > 0;
+      const hasLeft = minutesUntilDeparture <= 0;
+      
+      return {
+        ...train,
+        minutesUntilDeparture,
+        isLate,
+        hasLeft,
+        lateWarning: isLate ? '⚠️ 即將發車' : hasLeft ? '❌ 已發車' : undefined
+      };
+    });
+    
+    // Sort by departure time (upcoming first)
+    filtered.sort((a, b) => {
+      const timeA = a.departureTime.replace(':', '');
+      const timeB = b.departureTime.replace(':', '');
+      return timeA.localeCompare(timeB);
+    });
+    
+    // Include backup options - if we have fewer than 3 trains, include some non-monthly-pass trains
+    const primaryResults = filtered.slice(0, preferences?.maxResults || 3);
+    
+    if (primaryResults.length < 3 && !preferences?.includeAllTrainTypes) {
+      const allTrains = trains.map(train => {
+        const trainTime = this.parseTrainTime(train.departureTime);
+        const minutesUntilDeparture = Math.round((trainTime.getTime() - now.getTime()) / (1000 * 60));
+        const isLate = minutesUntilDeparture <= 15 && minutesUntilDeparture > 0;
+        const hasLeft = minutesUntilDeparture <= 0;
+        
+        return {
+          ...train,
+          minutesUntilDeparture,
+          isLate,
+          hasLeft,
+          lateWarning: isLate ? '⚠️ 即將發車' : hasLeft ? '❌ 已發車' : undefined,
+          isBackupOption: !train.isMonthlyPassEligible
+        };
+      });
+      
+      const backupTrains = allTrains
+        .filter(train => !train.isMonthlyPassEligible && train.minutesUntilDeparture > 0)
+        .slice(0, 3 - primaryResults.length);
+      
+      return [...primaryResults, ...backupTrains];
+    }
+    
+    return primaryResults;
+  }
+  
+  /**
+   * Parse train departure time with explicit date context
+   * @param timeString - Time in HH:MM:SS format
+   * @param referenceDate - Optional reference date for the train schedule
+   * @returns Date object with proper date context
+   */
+  private parseTrainTime(timeString: string, referenceDate?: Date): Date {
+    const [hours, minutes, seconds] = timeString.split(':').map(Number);
+    const now = new Date();
+    const refDate = referenceDate || now;
+    
+    // Create train time using reference date
+    const trainTime = new Date(
+      refDate.getFullYear(), 
+      refDate.getMonth(), 
+      refDate.getDate(), 
+      hours, 
+      minutes, 
+      seconds || 0
+    );
+    
+    // Only adjust to next day if:
+    // 1. No explicit reference date was provided AND
+    // 2. The time has already passed today AND
+    // 3. We're dealing with today's schedule (not future dates)
+    if (!referenceDate && trainTime < now) {
+      const hoursDiff = now.getHours() - hours;
+      // If the time difference is significant (>20 hours), likely it's an early morning train tomorrow
+      // Otherwise, it might be a train that just departed
+      if (hoursDiff > 20 || (hoursDiff < 0 && Math.abs(hoursDiff) < 4)) {
+        trainTime.setDate(trainTime.getDate() + 1);
+      }
+    }
+    
+    return trainTime;
   }
 
   // Load station data from TDX API with failure state tracking
@@ -598,57 +1068,166 @@ class SmartTRAServer {
         };
       }
 
-      // Validate stations using search_station functionality
-      const stationValidation = await this.validateStations(parsed);
-      if (!stationValidation.valid) {
+      // Ensure station data is loaded
+      if (!this.stationDataLoaded) {
+        await this.loadStationData();
+      }
+
+      if (!this.stationDataLoaded) {
         return {
           content: [{
             type: 'text',
-            text: `❌ Station validation failed:\n\n${stationValidation.message}\n\n` +
+            text: '⚠️ Station data is not available. Please check TDX credentials and network connection.'
+          }]
+        };
+      }
+
+      // Validate and get station IDs
+      if (!parsed.origin || !parsed.destination) {
+        return {
+          content: [{
+            type: 'text',
+            text: `❌ Missing origin or destination station.\n\n` +
                   `**What I understood:**\n${this.queryParser.getSummary(parsed)}`
           }]
         };
       }
 
-      // Format response with parsed information and next steps
-      let responseText = `🚄 **Train Search Query Parsed Successfully**\n\n`;
-      responseText += `**Journey:** ${parsed.origin} → ${parsed.destination}\n`;
+      const originResults = this.searchStations(parsed.origin);
+      const destinationResults = this.searchStations(parsed.destination);
+
+      if (originResults.length === 0 || destinationResults.length === 0) {
+        return {
+          content: [{
+            type: 'text',
+            text: `❌ Station validation failed:\n\n` +
+                  `Could not find ${originResults.length === 0 ? 'origin' : 'destination'} station.\n\n` +
+                  `**What I understood:**\n${this.queryParser.getSummary(parsed)}`
+          }]
+        };
+      }
+
+      const originStation = originResults[0];
+      const destinationStation = destinationResults[0];
+
+      // Get train timetable from TDX API
+      const timetableData = await this.getDailyTrainTimetable(
+        originStation.stationId,
+        destinationStation.stationId,
+        parsed.date
+      );
+
+      if (timetableData.length === 0) {
+        return {
+          content: [{
+            type: 'text',
+            text: `❌ No trains found for this route.\n\n` +
+                  `**Route:** ${originStation.name} → ${destinationStation.name}\n` +
+                  `**Date:** ${parsed.date || 'Today'}\n\n` +
+                  `This might happen if:\n` +
+                  `• **No service today**: Trains may not run on this route today\n` +
+                  `• **Suspended service**: Trains temporarily suspended due to maintenance or weather\n` +
+                  `• **Requires transfers**: Route needs connections (try nearby major stations)\n` +
+                  `• **Future date**: Date is outside available timetable data\n` +
+                  `• **No direct trains**: No direct service on this route\n\n` +
+                  `**Suggestions:**\n` +
+                  `• Try a different date or check for service alerts\n` +
+                  `• Search for routes via major stations (台北, 台中, 高雄)\n` +
+                  `• Check TRA official website for service updates`
+          }]
+        };
+      }
+
+      // Process and filter results
+      const trainResults = this.processTrainSearchResults(timetableData, originStation.stationId, destinationStation.stationId);
       
-      if (parsed.date) {
-        responseText += `**Date:** ${parsed.date}\n`;
-      }
-      if (parsed.time) {
-        responseText += `**Time:** ${parsed.time}\n`;
-      }
-      if (parsed.preferences?.trainType) {
-        responseText += `**Train Type:** ${parsed.preferences.trainType}\n`;
-      }
-      if (parsed.preferences?.fastest) {
-        responseText += `**Priority:** Fastest route\n`;
-      } else if (parsed.preferences?.cheapest) {
-        responseText += `**Priority:** Cheapest fare\n`;
-      }
-      if (parsed.preferences?.directOnly) {
-        responseText += `**Requirement:** Direct trains only\n`;
-      }
+      // Add fare information to train results (runs in parallel with processing)
+      const fareInfo = await this.getODFare(originStation.stationId, destinationStation.stationId);
+      const trainResultsWithFares = trainResults.map(train => ({
+        ...train,
+        fareInfo: fareInfo || undefined
+      }));
       
-      responseText += `**Confidence:** ${Math.round(parsed.confidence * 100)}%\n\n`;
-      
-      // Add machine-readable data for future integration
+      const filteredResults = this.filterCommuterTrains(trainResultsWithFares, parsed.preferences);
+
+      // Format response
+      let responseText = `🚄 **Train Search Results**\n\n`;
+      responseText += `**Route:** ${originStation.name} → ${destinationStation.name}\n`;
+      responseText += `**Date:** ${parsed.date || 'Today'}\n`;
+      responseText += `**Found:** ${filteredResults.length} trains (${timetableData.length} total)\n\n`;
+
+      if (filteredResults.length === 0) {
+        responseText += `❌ No trains found in the next 2 hours.\n\n`;
+        responseText += `Monthly pass is valid for: 區間車, 區間快車\n`;
+        responseText += `Try:\n• Extending time window with "接下來4小時"\n• Including all train types with "所有車種"`;
+      } else {
+        // Separate primary and backup options
+        const primaryTrains = filteredResults.filter(train => !train.isBackupOption);
+        const backupTrains = filteredResults.filter(train => train.isBackupOption);
+        
+        if (primaryTrains.length > 0) {
+          responseText += `**月票可搭 (接下來2小時):**\n\n`;
+          primaryTrains.forEach((train, index) => {
+            const passIcon = train.isMonthlyPassEligible ? '🎫' : '💰';
+            const lateWarning = train.lateWarning ? ` ${train.lateWarning}` : '';
+            const timeInfo = train.minutesUntilDeparture ? ` (${train.minutesUntilDeparture}分後)` : '';
+            const fareText = train.fareInfo ? ` | 票價: $${train.fareInfo.adult}` : '';
+            
+            responseText += `${index + 1}. **${train.trainType} ${train.trainNo}** ${passIcon}${lateWarning}\n`;
+            responseText += `   出發: ${train.departureTime}${timeInfo} → 抵達: ${train.arrivalTime}\n`;
+            responseText += `   行程時間: ${train.travelTime} (${train.stops} 個中間站)${fareText}\n\n`;
+          });
+        }
+        
+        if (backupTrains.length > 0) {
+          responseText += `**備選車次 (需另購票):**\n\n`;
+          backupTrains.forEach((train, index) => {
+            const timeInfo = train.minutesUntilDeparture ? ` (${train.minutesUntilDeparture}分後)` : '';
+            const lateWarning = train.lateWarning ? ` ${train.lateWarning}` : '';
+            const fareText = train.fareInfo ? ` | 票價: $${train.fareInfo.adult}` : '';
+            
+            responseText += `${primaryTrains.length + index + 1}. **${train.trainType} ${train.trainNo}** 💰${lateWarning}\n`;
+            responseText += `   出發: ${train.departureTime}${timeInfo} → 抵達: ${train.arrivalTime}\n`;
+            responseText += `   行程時間: ${train.travelTime} (${train.stops} 個中間站)${fareText}\n\n`;
+          });
+        }
+
+        responseText += `🎫 = 月票可搭 | 💰 = 需另購票 | ⚠️ = 即將發車\n`;
+        responseText += `時間視窗: 接下來2小時 | 可用 "接下來4小時" 擴展搜尋\n\n`;
+        
+        // Add fare summary if available
+        if (fareInfo) {
+          responseText += `**票價資訊:**\n`;
+          responseText += `• 全票: $${fareInfo.adult} | 兒童票: $${fareInfo.child} | 敬老愛心票: $${fareInfo.senior}\n\n`;
+        }
+      }
+
+      // Add machine-readable data
       const structuredData = JSON.stringify({
-        parsed: {
-          origin: parsed.origin,
-          destination: parsed.destination,
-          date: parsed.date,
-          time: parsed.time,
-          preferences: parsed.preferences,
-          confidence: parsed.confidence
+        route: {
+          origin: { id: originStation.stationId, name: originStation.name },
+          destination: { id: destinationStation.stationId, name: destinationStation.name }
         },
-        status: 'ready_for_timetable_api',
-        nextStep: 'Call TDX timetable API with validated parameters'
+        date: parsed.date || new Date().toISOString().split('T')[0],
+        totalTrains: timetableData.length,
+        filteredTrains: filteredResults.length,
+        trains: filteredResults.map(train => ({
+          trainNo: train.trainNo,
+          trainType: train.trainType,
+          departure: train.departureTime,
+          arrival: train.arrivalTime,
+          travelTime: train.travelTime,
+          monthlyPassEligible: train.isMonthlyPassEligible,
+          stops: train.stops,
+          minutesUntilDeparture: train.minutesUntilDeparture,
+          isLate: train.isLate,
+          hasLeft: train.hasLeft,
+          lateWarning: train.lateWarning,
+          isBackupOption: train.isBackupOption,
+          fareInfo: train.fareInfo
+        }))
       }, null, 2);
-      
-      responseText += `[STAGE 5] Query parsing successful! Ready for TDX API integration in Stage 6.\n\n`;
+
       responseText += `**Machine-readable data:**\n\`\`\`json\n${structuredData}\n\`\`\``;
 
       return {
@@ -663,7 +1242,11 @@ class SmartTRAServer {
       return {
         content: [{
           type: 'text',
-          text: `❌ Error parsing train search query: ${error instanceof Error ? error.message : String(error)}`
+          text: `❌ Error searching trains: ${error instanceof Error ? error.message : String(error)}\n\n` +
+                `This might be due to:\n` +
+                `• Network connectivity issues\n` +
+                `• TDX API service unavailable\n` +
+                `• Invalid station IDs or date format`
         }]
       };
     }
@@ -781,7 +1364,7 @@ class SmartTRAServer {
 
   private setupGracefulShutdown() {
     // Only set up shutdown handlers if not in test environment
-    if (process.env.NODE_ENV !== 'test' && process.env.JEST_WORKER_ID === undefined) {
+    if (!isTestEnvironment()) {
       const gracefulShutdown = async (signal: string) => {
         console.log(`Received ${signal}, starting graceful shutdown...`);
         this.isShuttingDown = true;
@@ -827,30 +1410,58 @@ class SmartTRAServer {
     };
   }
 
+  /**
+   * Get fare calculation rules from configuration or defaults
+   * Can be overridden via environment variables for different deployments
+   */
+  private getFareRules(): FareRules {
+    return {
+      child: parseFloat(process.env.FARE_CHILD_RATIO || String(DEFAULT_FARE_RULES.child)),
+      senior: parseFloat(process.env.FARE_SENIOR_RATIO || String(DEFAULT_FARE_RULES.senior)),
+      disabled: parseFloat(process.env.FARE_DISABLED_RATIO || String(DEFAULT_FARE_RULES.disabled)),
+      roundingMethod: (process.env.FARE_ROUNDING_METHOD as FareRules['roundingMethod']) || DEFAULT_FARE_RULES.roundingMethod
+    };
+  }
+
+  /**
+   * Get the appropriate rounding function based on configuration
+   */
+  private getRoundingFunction(method: FareRules['roundingMethod']): (n: number) => number {
+    switch (method) {
+      case 'floor':
+        return Math.floor;
+      case 'ceil':
+        return Math.ceil;
+      case 'round':
+      default:
+        return Math.round;
+    }
+  }
+
   // Test helper methods for better test isolation
   resetRateLimitingForTest(): void {
-    if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID !== undefined) {
+    if (isTestEnvironment()) {
       this.requestCount.clear();
       this.lastRequestTime.clear();
     }
   }
 
   setRateLimitForTest(clientId: string, count: number, timestamp?: number): void {
-    if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID !== undefined) {
+    if (isTestEnvironment()) {
       this.requestCount.set(clientId, count);
       this.lastRequestTime.set(clientId, timestamp || Date.now());
     }
   }
 
   getSessionIdForTest(): string {
-    if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID !== undefined) {
+    if (isTestEnvironment()) {
       return this.sessionId;
     }
     throw new Error('Test methods only available in test environment');
   }
 
   checkRateLimitForTest(clientId: string): void {
-    if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID !== undefined) {
+    if (isTestEnvironment()) {
       this.checkRateLimit(clientId);
     } else {
       throw new Error('Test methods only available in test environment');
