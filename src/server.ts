@@ -175,6 +175,23 @@ interface FareInfo {
   currency: string;
 }
 
+// Live Board response structure for real-time train information
+interface TDXLiveBoardEntry {
+  StationID: string;
+  StationName: { Zh_tw: string; En: string };
+  TrainNo: string;
+  TrainTypeID: string;
+  TrainTypeName: { Zh_tw: string; En: string };
+  Direction: number;
+  EndingStationID: string;
+  EndingStationName: { Zh_tw: string; En: string };
+  ScheduledDepartureTime: string;
+  ActualDepartureTime?: string;
+  DelayTime?: number;  // Delay in minutes
+  TrainStatus?: string; // e.g., "準點", "誤點", "取消"
+  Platform?: string;
+}
+
 interface TrainSearchResult {
   trainNo: string;
   trainType: string;
@@ -191,6 +208,11 @@ interface TrainSearchResult {
   lateWarning?: string;
   isBackupOption?: boolean;
   fareInfo?: FareInfo;
+  // Real-time delay information
+  delayMinutes?: number;
+  actualDepartureTime?: string;
+  actualArrivalTime?: string;
+  trainStatus?: string; // "準點", "誤點", "取消"
 }
 
 class SmartTRAServer {
@@ -738,13 +760,15 @@ class SmartTRAServer {
     return fareInfo;
   }
 
-  // Attempt to get live delay data (optional enhancement when available)
-  private async tryGetLiveDelayData(stationId: string): Promise<any[]> {
+  // Get live delay data from TDX Station Live Board API
+  private async tryGetLiveDelayData(stationId: string): Promise<Map<string, TDXLiveBoardEntry>> {
+    const liveDataMap = new Map<string, TDXLiveBoardEntry>();
+    
     try {
       const token = await this.getAccessToken();
       const baseUrl = process.env.TDX_BASE_URL || 'https://tdx.transportdata.tw/api/basic';
       
-      const response = await fetch(`${baseUrl}/v3/Rail/TRA/StationLiveBoard/Station/${stationId}?%24format=JSON&%24top=20`, {
+      const response = await fetch(`${baseUrl}/v3/Rail/TRA/StationLiveBoard/Station/${stationId}?%24format=JSON&%24top=50`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Accept': 'application/json'
@@ -753,21 +777,26 @@ class SmartTRAServer {
 
       if (!response.ok) {
         console.error(`Live data not available for station ${stationId} (${response.status})`);
-        return [];
+        return liveDataMap;
       }
 
-      const liveData = await response.json() as any[];
+      const liveData = await response.json() as TDXLiveBoardEntry[];
       
       if (!Array.isArray(liveData) || liveData.length === 0) {
         console.error(`No live trains found for station ${stationId} - trains may not be running`);
-        return [];
+        return liveDataMap;
+      }
+      
+      // Build a map indexed by train number for quick lookup
+      for (const entry of liveData) {
+        liveDataMap.set(entry.TrainNo, entry);
       }
       
       console.error(`Found ${liveData.length} live trains for station ${stationId}`);
-      return liveData;
+      return liveDataMap;
     } catch (error) {
       console.error(`Failed to get live data for station ${stationId}:`, error instanceof Error ? error.message : String(error));
-      return []; // Graceful fallback - return empty array
+      return liveDataMap; // Graceful fallback - return empty map
     }
   }
 
@@ -927,6 +956,44 @@ class SmartTRAServer {
     }
     
     return trainTime;
+  }
+
+  /**
+   * Add minutes to a time string
+   * @param timeString - Time in HH:MM or HH:MM:SS format
+   * @param minutes - Minutes to add (can be negative)
+   * @returns Updated time string in same format
+   */
+  private addMinutesToTime(timeString: string, minutes: number): string {
+    const parts = timeString.split(':');
+    const hours = parseInt(parts[0], 10);
+    const mins = parseInt(parts[1], 10);
+    const secs = parts[2] ? parseInt(parts[2], 10) : 0;
+    
+    // Convert to total minutes
+    let totalMinutes = hours * 60 + mins + minutes;
+    
+    // Handle day overflow/underflow
+    while (totalMinutes < 0) {
+      totalMinutes += 24 * 60;
+    }
+    while (totalMinutes >= 24 * 60) {
+      totalMinutes -= 24 * 60;
+    }
+    
+    // Convert back to hours and minutes
+    const newHours = Math.floor(totalMinutes / 60);
+    const newMins = totalMinutes % 60;
+    
+    // Format the result
+    const hourStr = newHours.toString().padStart(2, '0');
+    const minStr = newMins.toString().padStart(2, '0');
+    
+    if (parts[2]) {
+      const secStr = secs.toString().padStart(2, '0');
+      return `${hourStr}:${minStr}:${secStr}`;
+    }
+    return `${hourStr}:${minStr}`;
   }
 
   // Load station data from TDX API with failure state tracking
@@ -1288,15 +1355,40 @@ class SmartTRAServer {
       // Process and filter results
       const trainResults = this.processTrainSearchResults(timetableData, originStation.stationId, destinationStation.stationId);
       
-      // Add fare information to train results (runs in parallel with processing)
-      const fareInfo = await this.getODFare(originStation.stationId, destinationStation.stationId);
-      const trainResultsWithFares = trainResults.map(train => ({
-        ...train,
-        fareInfo: fareInfo || undefined
-      }));
+      // Fetch live delay data and fare information in parallel
+      const [liveDelayData, fareInfo] = await Promise.all([
+        this.tryGetLiveDelayData(originStation.stationId),
+        this.getODFare(originStation.stationId, destinationStation.stationId)
+      ]);
+      
+      // Merge live delay data with train results
+      const trainResultsWithLiveData = trainResults.map(train => {
+        const liveEntry = liveDelayData.get(train.trainNo);
+        
+        if (liveEntry && liveEntry.DelayTime !== undefined) {
+          // Calculate actual times based on delay
+          const actualDepartureTime = this.addMinutesToTime(train.departureTime, liveEntry.DelayTime);
+          const actualArrivalTime = this.addMinutesToTime(train.arrivalTime, liveEntry.DelayTime);
+          
+          return {
+            ...train,
+            fareInfo: fareInfo || undefined,
+            delayMinutes: liveEntry.DelayTime,
+            actualDepartureTime,
+            actualArrivalTime,
+            trainStatus: liveEntry.TrainStatus || (liveEntry.DelayTime > 0 ? '誤點' : '準點')
+          };
+        }
+        
+        return {
+          ...train,
+          fareInfo: fareInfo || undefined,
+          trainStatus: '無即時資訊'
+        };
+      });
       
       const filteredResults = this.filterCommuterTrains(
-        trainResultsWithFares, 
+        trainResultsWithLiveData, 
         parsed.preferences,
         parsed.date,
         parsed.time
@@ -1325,34 +1417,79 @@ class SmartTRAServer {
           responseText += `**月票可搭 (接下來2小時):**\n\n`;
           primaryTrains.forEach((train, index) => {
             const passIcon = train.isMonthlyPassEligible ? '🎫' : '💰';
-            const lateWarning = train.lateWarning ? ` ${train.lateWarning}` : '';
+            
+            // Format delay/status information
+            let statusInfo = '';
+            if (train.delayMinutes !== undefined && train.delayMinutes > 0) {
+              statusInfo = ` 🚨 誤點${train.delayMinutes}分鐘`;
+            } else if (train.trainStatus === '準點') {
+              statusInfo = ' ✅ 準點';
+            } else if (train.lateWarning) {
+              statusInfo = ` ${train.lateWarning}`;
+            }
+            
+            // Show actual times if delayed
+            let departureDisplay = train.departureTime;
+            let arrivalDisplay = train.arrivalTime;
+            if (train.actualDepartureTime && train.delayMinutes && train.delayMinutes > 0) {
+              departureDisplay = `${train.departureTime} → 實際: ${train.actualDepartureTime}`;
+              arrivalDisplay = `${train.arrivalTime} → 實際: ${train.actualArrivalTime}`;
+            }
+            
             const timeInfo = train.minutesUntilDeparture ? ` (${train.minutesUntilDeparture}分後)` : '';
             const fareText = train.fareInfo ? ` | 票價: $${train.fareInfo.adult}` : '';
             
             const stopDescription = train.stops === 0 ? '直達' : `經停 ${train.stops} 站`;
             
-            responseText += `${index + 1}. **${train.trainType} ${train.trainNo}** ${passIcon}${lateWarning}\n`;
-            responseText += `   出發: ${train.departureTime}${timeInfo} → 抵達: ${train.arrivalTime}\n`;
-            responseText += `   行程時間: ${train.travelTime} (${stopDescription})${fareText}\n\n`;
+            responseText += `${index + 1}. **${train.trainType} ${train.trainNo}** ${passIcon}${statusInfo}\n`;
+            responseText += `   出發: ${departureDisplay}${timeInfo}\n`;
+            responseText += `   抵達: ${arrivalDisplay}\n`;
+            responseText += `   行程時間: ${train.travelTime} (${stopDescription})${fareText}\n`;
+            if (train.trainStatus && train.trainStatus !== '無即時資訊') {
+              responseText += `   狀態: ${train.trainStatus}\n`;
+            }
+            responseText += '\n';
           });
         }
         
         if (backupTrains.length > 0) {
           responseText += `**備選車次 (需另購票):**\n\n`;
           backupTrains.forEach((train, index) => {
+            // Format delay/status information
+            let statusInfo = '';
+            if (train.delayMinutes !== undefined && train.delayMinutes > 0) {
+              statusInfo = ` 🚨 誤點${train.delayMinutes}分鐘`;
+            } else if (train.trainStatus === '準點') {
+              statusInfo = ' ✅ 準點';
+            } else if (train.lateWarning) {
+              statusInfo = ` ${train.lateWarning}`;
+            }
+            
+            // Show actual times if delayed
+            let departureDisplay = train.departureTime;
+            let arrivalDisplay = train.arrivalTime;
+            if (train.actualDepartureTime && train.delayMinutes && train.delayMinutes > 0) {
+              departureDisplay = `${train.departureTime} → 實際: ${train.actualDepartureTime}`;
+              arrivalDisplay = `${train.arrivalTime} → 實際: ${train.actualArrivalTime}`;
+            }
+            
             const timeInfo = train.minutesUntilDeparture ? ` (${train.minutesUntilDeparture}分後)` : '';
-            const lateWarning = train.lateWarning ? ` ${train.lateWarning}` : '';
             const fareText = train.fareInfo ? ` | 票價: $${train.fareInfo.adult}` : '';
             
             const stopDescription = train.stops === 0 ? '直達' : `經停 ${train.stops} 站`;
             
-            responseText += `${primaryTrains.length + index + 1}. **${train.trainType} ${train.trainNo}** 💰${lateWarning}\n`;
-            responseText += `   出發: ${train.departureTime}${timeInfo} → 抵達: ${train.arrivalTime}\n`;
-            responseText += `   行程時間: ${train.travelTime} (${stopDescription})${fareText}\n\n`;
+            responseText += `${primaryTrains.length + index + 1}. **${train.trainType} ${train.trainNo}** 💰${statusInfo}\n`;
+            responseText += `   出發: ${departureDisplay}${timeInfo}\n`;
+            responseText += `   抵達: ${arrivalDisplay}\n`;
+            responseText += `   行程時間: ${train.travelTime} (${stopDescription})${fareText}\n`;
+            if (train.trainStatus && train.trainStatus !== '無即時資訊') {
+              responseText += `   狀態: ${train.trainStatus}\n`;
+            }
+            responseText += '\n';
           });
         }
 
-        responseText += `🎫 = 月票可搭 | 💰 = 需另購票 | ⚠️ = 即將發車\n`;
+        responseText += `🎫 = 月票可搭 | 💰 = 需另購票 | ⚠️ = 即將發車 | 🚨 = 誤點 | ✅ = 準點\n`;
         responseText += `時間視窗: 接下來2小時 | 可用 "接下來4小時" 擴展搜尋\n\n`;
         
         // Add fare summary if available
@@ -1384,7 +1521,12 @@ class SmartTRAServer {
           hasLeft: train.hasLeft,
           lateWarning: train.lateWarning,
           isBackupOption: train.isBackupOption,
-          fareInfo: train.fareInfo
+          fareInfo: train.fareInfo,
+          // Real-time delay information
+          delayMinutes: train.delayMinutes,
+          actualDeparture: train.actualDepartureTime,
+          actualArrival: train.actualArrivalTime,
+          trainStatus: train.trainStatus
         }))
       }, null, 2);
 
@@ -1429,46 +1571,6 @@ class SmartTRAServer {
     return missing.join('\n');
   }
 
-  // Validate station names using existing search functionality
-  private async validateStations(parsed: ParsedQuery): Promise<{ valid: boolean; message: string }> {
-    if (!parsed.origin || !parsed.destination) {
-      return { valid: false, message: 'Origin and destination are required' };
-    }
-
-    // Validate origin station
-    const originResults = this.searchStations(parsed.origin);
-    if (originResults.length === 0) {
-      return {
-        valid: false,
-        message: `找不到出發車站 "${parsed.origin}"，請使用完整站名如「臺北」或「台中」`
-      };
-    }
-
-    // Validate destination station
-    const destinationResults = this.searchStations(parsed.destination);
-    if (destinationResults.length === 0) {
-      return {
-        valid: false,
-        message: `找不到目的車站 "${parsed.destination}"，請使用完整站名如「臺北」或「台中」`
-      };
-    }
-
-    // Check confidence of matches
-    const originMatch = originResults[0];
-    const destinationMatch = destinationResults[0];
-
-    if (originMatch.confidence < 0.7 || destinationMatch.confidence < 0.7) {
-      return {
-        valid: false,
-        message: `Station names need clarification:\n` +
-                 `• Origin: "${parsed.origin}" → best match: "${originMatch.name}" (${Math.round(originMatch.confidence * 100)}%)\n` +
-                 `• Destination: "${parsed.destination}" → best match: "${destinationMatch.name}" (${Math.round(destinationMatch.confidence * 100)}%)\n\n` +
-                 `Please use more specific station names.`
-      };
-    }
-
-    return { valid: true, message: 'Stations validated successfully' };
-  }
 
   private checkRateLimit(clientId: string): void {
     const now = Date.now();
