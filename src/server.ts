@@ -436,11 +436,29 @@ class SmartTRAServer {
       const token = await this.getAccessToken();
       const baseUrl = process.env.TDX_BASE_URL || 'https://tdx.transportdata.tw/api/basic';
       
-      // Use today if no date specified
-      const date = trainDate || new Date().toISOString().split('T')[0];
+      // Use today if no date specified, or validate requested date
+      let date = trainDate || new Date().toISOString().split('T')[0];
+      
+      // TDX API typically has limited date range (usually current date +/- few days)
+      // If requested date is too far in future, fall back to today
+      if (trainDate) {
+        const requestedDate = new Date(trainDate);
+        const today = new Date();
+        const maxDaysAhead = 7; // TDX usually provides ~7 days ahead
+        const daysDifference = (requestedDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24);
+        
+        if (daysDifference > maxDaysAhead || daysDifference < -1) {
+          console.error(`Requested date ${trainDate} is outside TDX data range, using today's date`);
+          date = today.toISOString().split('T')[0];
+        }
+      }
       
       // Use the OD (Origin-Destination) endpoint for efficient filtering
-      const endpoint = `/v2/Rail/TRA/DailyTrainTimetable/OD/${originStationId}/to/${destinationStationId}/${date}`;
+      // For today's date, use the Today endpoint which is more reliable
+      const isToday = date === new Date().toISOString().split('T')[0];
+      const endpoint = isToday 
+        ? `/v2/Rail/TRA/DailyTrainTimetable/Today/OD/${originStationId}/to/${destinationStationId}`
+        : `/v2/Rail/TRA/DailyTrainTimetable/OD/${originStationId}/to/${destinationStationId}/${date}`;
       
       const response = await fetch(`${baseUrl}${endpoint}?%24format=JSON`, {
         headers: {
@@ -1199,6 +1217,9 @@ class SmartTRAServer {
         };
       }
 
+      // Check if date was adjusted due to TDX API limitations
+      const wasDateAdjusted = parsed.date && parsed.date !== timetableData[0]?.TrainDate;
+      
       // Process and filter results
       const trainResults = this.processTrainSearchResults(timetableData, originStation.stationId, destinationStation.stationId);
       
@@ -1223,6 +1244,12 @@ class SmartTRAServer {
       if (parsed.time) {
         responseText += `**Target Time:** ${parsed.time}\n`;
       }
+      
+      // Add notification if date was adjusted
+      if (wasDateAdjusted) {
+        responseText += `⚠️ **Date Adjusted**: Requested date outside TDX data range, showing today's schedule\n`;
+      }
+      
       responseText += `**Found:** ${filteredResults.length} trains (${timetableData.length} total)\n\n`;
 
       if (filteredResults.length === 0) {
