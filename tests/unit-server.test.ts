@@ -37,7 +37,7 @@ describe('QueryParser', () => {
 
     it('should handle train type specifications', () => {
       const result = parser.parse('台北到台中自強號');
-      expect(result.preferences?.trainType).toBe('自強號');
+      expect(result.preferences?.trainType).toBe('自強');
     });
 
     it('should sanitize malicious input', () => {

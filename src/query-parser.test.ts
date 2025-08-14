@@ -71,7 +71,7 @@ describe('QueryParser', () => {
 
     test('should extract 12-hour format with period', () => {
       const result = parser.parse('台北到台中下午2點');
-      expect(result.time).toBe('02:00'); // Current implementation issue - should be 14:00
+      expect(result.time).toBe('14:00');
     });
 
     test('should extract morning time period', () => {
@@ -81,7 +81,7 @@ describe('QueryParser', () => {
 
     test('should handle midnight correctly', () => {
       const result = parser.parse('台北到台中凌晨12點');
-      expect(result.time).toBe('12:00'); // Current implementation issue - should be 00:00
+      expect(result.time).toBe('00:00');
     });
 
     test('should handle noon correctly', () => {
@@ -180,7 +180,7 @@ describe('QueryParser', () => {
       expect(result.origin).toBe('高雄');
       expect(result.destination).toBe('台北');
       expect(result.date).toBeDefined();
-      expect(result.time).toBe('02:00'); // Current implementation issue
+      expect(result.time).toBe('14:00');
       expect(result.preferences?.fastest).toBe(true);
     });
   });

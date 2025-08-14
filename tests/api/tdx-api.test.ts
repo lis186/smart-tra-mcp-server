@@ -98,7 +98,7 @@ describe('TDX API Integration Tests', () => {
 
       expect(response.status).toBe(200);
       
-      const data = await response.json();
+      const data = await response.json() as { TrainTimetables: Array<{ TrainInfo: any; StopTimes: any[] }> };
       expect(data).toHaveProperty('TrainTimetables');
       expect(Array.isArray(data.TrainTimetables)).toBe(true);
       
@@ -129,7 +129,7 @@ describe('TDX API Integration Tests', () => {
 
       expect(response.status).toBe(200);
       
-      const data = await response.json();
+      const data = await response.json() as any[];
       expect(Array.isArray(data)).toBe(true);
       
       if (data.length > 0) {
