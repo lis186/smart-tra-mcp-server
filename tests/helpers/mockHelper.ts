@@ -127,8 +127,8 @@ export class TDXMockHelper {
           StopSequence: 1,
           StationID: '1000',
           StationName: { Zh_tw: '臺北', En: 'Taipei' },
-          ArrivalTime: '08:15:00',
-          DepartureTime: '08:15:00',
+          ArrivalTime: '08:30:00',
+          DepartureTime: '08:30:00',
           SuspendedFlag: 0
         },
         {
@@ -170,8 +170,8 @@ export class TDXMockHelper {
           StopSequence: 1,
           StationID: '1000',
           StationName: { Zh_tw: '臺北', En: 'Taipei' },
-          ArrivalTime: '08:45:00',
-          DepartureTime: '08:45:00',
+          ArrivalTime: '09:00:00',
+          DepartureTime: '09:00:00',
           SuspendedFlag: 0
         },
         {
