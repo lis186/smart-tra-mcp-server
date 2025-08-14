@@ -24,7 +24,10 @@
       "Bash(git stash:*)",
       "Bash(npm run lint)",
       "Bash(rm:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(git commit:*)",
+      "Bash(timeout:*)",
+      "Bash(touch:*)"
     ],
     "deny": []
   }

@@ -255,15 +255,8 @@ export class QueryParser {
    * Extract time information from query
    */
   private extractTime(query: string): { time: string } {
-    // Check for specific times first (8:30, 14:00, etc.)
-    const timeMatch = query.match(this.COMPILED_PATTERNS.TIME_SPECIFIC);
-    if (timeMatch) {
-      const hours = timeMatch[1];
-      const minutes = timeMatch[2] || '00';
-      return { time: `${hours.padStart(2, '0')}:${minutes}` };
-    }
-
-    // Check for 12-hour format with period indicators
+    // Check for 12-hour format with period indicators FIRST
+    // This needs to be checked before TIME_SPECIFIC to handle "下午2點" correctly
     const periodMatch = query.match(this.COMPILED_PATTERNS.TIME_12HOUR);
     if (periodMatch) {
       const period = periodMatch[1];
@@ -280,6 +273,14 @@ export class QueryParser {
       }
 
       return { time: `${hours.toString().padStart(2, '0')}:${minutes}` };
+    }
+
+    // Check for specific times without period indicators (8:30, 14:00, etc.)
+    const timeMatch = query.match(this.COMPILED_PATTERNS.TIME_SPECIFIC);
+    if (timeMatch) {
+      const hours = timeMatch[1];
+      const minutes = timeMatch[2] || '00';
+      return { time: `${hours.padStart(2, '0')}:${minutes}` };
     }
 
     // Check for general time periods

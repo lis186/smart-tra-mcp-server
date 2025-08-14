@@ -7,10 +7,32 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import * as dotenv from 'dotenv';
-import { QueryParser, ParsedQuery } from './query-parser';
+import { QueryParser, ParsedQuery } from './query-parser.js';
 
-// Load environment variables
-dotenv.config();
+// Constants
+const MONTHLY_PASS_TRAIN_TYPES = {
+  LOCAL: '10',      // 區間車
+  FAST_LOCAL: '11'  // 區間快車
+} as const;
+
+const API_CONFIG = {
+  TOKEN_CACHE_DURATION: 24 * 60 * 60 * 1000, // 24 hours in milliseconds  
+  TOKEN_SAFETY_BUFFER: 5 * 60 * 1000,       // 5 minutes in milliseconds
+  RATE_LIMIT_WINDOW: 60 * 1000,             // 1 minute in milliseconds
+  MAX_REQUESTS_PER_WINDOW: 50,
+  MAX_QUERY_LENGTH: 500,
+  MAX_CONTEXT_LENGTH: 200
+} as const;
+
+// Load environment variables - needed for TDX API credentials
+// Redirect console output temporarily to prevent stdout pollution
+const originalConsoleLog = console.log;
+console.log = () => {}; // Temporarily silence console.log
+try {
+  dotenv.config();
+} finally {
+  console.log = originalConsoleLog; // Restore console.log
+}
 
 // Utility function to check if running in test environment
 function isTestEnvironment(): boolean {
@@ -69,24 +91,57 @@ interface TRATrainTimetableStop {
 }
 
 interface TRATrainTimetable {
-  TrainNo: string;
-  RouteID: string;
-  Direction: number;
-  TrainClassificationID: string;
-  TrainTypeID: string;
-  TrainTypeName: { Zh_tw: string; En: string };
-  StartingStationID: string;
-  StartingStationName: { Zh_tw: string; En: string };
-  EndingStationID: string;
-  EndingStationName: { Zh_tw: string; En: string };
-  TripLine: number;
-  WheelChairFlag: number;
-  PackageServiceFlag: number;
-  DiningFlag: number;
-  BreastFeedFlag: number;
-  BikeFlag: number;
+  TrainInfo: {
+    TrainNo: string;
+    Direction: number;
+    TrainTypeID: string;
+    TrainTypeCode: string;
+    TrainTypeName: { Zh_tw: string; En: string };
+    TripHeadSign: string;
+    StartingStationID: string;
+    StartingStationName: { Zh_tw: string; En: string };
+    EndingStationID: string;
+    EndingStationName: { Zh_tw: string; En: string };
+    TripLine: number;
+    WheelChairFlag: number;
+    PackageServiceFlag: number;
+    DiningFlag: number;
+    BreastFeedFlag: number;
+    BikeFlag: number;
+    CarFlag: number;
+    DailyFlag: number;
+    ExtraTrainFlag: number;
+    SuspendedFlag: number;
+    Note?: string;
+  };
+  StopTimes: Array<{
+    StopSequence: number;
+    StationID: string;
+    StationName: { Zh_tw: string; En: string };
+    ArrivalTime: string;
+    DepartureTime: string;
+    SuspendedFlag: number;
+  }>;
+}
+
+// v3 API response wrappers
+interface TDXDateRangeResponse {
+  UpdateTime: string;
+  UpdateInterval: number;
+  AuthorityCode: string;
+  StartDate: string;
+  EndDate: string;
+  TrainDates: string[];
+  Count: number;
+}
+
+interface TDXTrainTimetableResponse {
+  UpdateTime: string;
+  UpdateInterval: number;
+  SrcUpdateTime?: string;
+  SrcUpdateInterval?: number;
   TrainDate: string;
-  StopTimes: TRATrainTimetableStop[];
+  TrainTimetables: TRATrainTimetable[];
 }
 
 // TDX API fare response structure
@@ -165,10 +220,10 @@ class SmartTRAServer {
   private lastRateLimitCleanup = Date.now();
   
   // Security limits
-  private readonly MAX_QUERY_LENGTH = 1000;
-  private readonly MAX_CONTEXT_LENGTH = 500;
-  private readonly RATE_LIMIT_WINDOW = 60000; // 1 minute
-  private readonly RATE_LIMIT_MAX_REQUESTS = 30; // 30 requests per minute
+  private readonly MAX_QUERY_LENGTH = API_CONFIG.MAX_QUERY_LENGTH;
+  private readonly MAX_CONTEXT_LENGTH = API_CONFIG.MAX_CONTEXT_LENGTH;
+  private readonly RATE_LIMIT_WINDOW = API_CONFIG.RATE_LIMIT_WINDOW;
+  private readonly RATE_LIMIT_MAX_REQUESTS = API_CONFIG.MAX_REQUESTS_PER_WINDOW;
   private readonly GRACEFUL_SHUTDOWN_TIMEOUT = 5000; // 5 seconds
 
   constructor() {
@@ -376,7 +431,19 @@ class SmartTRAServer {
     const authUrl = process.env.TDX_AUTH_URL || 'https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token';
 
     if (!clientId || !clientSecret) {
-      throw new Error('TDX credentials not configured. Please set TDX_CLIENT_ID and TDX_CLIENT_SECRET environment variables.');
+      const missingVars = [];
+      if (!clientId) missingVars.push('TDX_CLIENT_ID');
+      if (!clientSecret) missingVars.push('TDX_CLIENT_SECRET');
+      
+      throw new Error(
+        `TDX credentials not configured. Missing: ${missingVars.join(', ')}\n\n` +
+        `Please:\n` +
+        `1. Create a .env file in the project root\n` +
+        `2. Add your TDX API credentials:\n` +
+        `   TDX_CLIENT_ID=your_client_id\n` +
+        `   TDX_CLIENT_SECRET=your_client_secret\n\n` +
+        `Get credentials from: https://tdx.transportdata.tw/`
+      );
     }
 
     const body = new URLSearchParams({
@@ -407,7 +474,7 @@ class SmartTRAServer {
       expiresAt
     };
     
-    console.log('TDX access token obtained successfully');
+    console.error('TDX access token obtained successfully');
     return tokenData.access_token;
   }
 
@@ -417,11 +484,39 @@ class SmartTRAServer {
       const token = await this.getAccessToken();
       const baseUrl = process.env.TDX_BASE_URL || 'https://tdx.transportdata.tw/api/basic';
       
-      // Use today if no date specified
-      const date = trainDate || new Date().toISOString().split('T')[0];
+      // First, check available date range from v3 API
+      const dateRangeResponse = await fetch(`${baseUrl}/v3/Rail/TRA/DailyTrainTimetable/TrainDates?%24format=JSON`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json'
+        }
+      });
       
-      // Use the OD (Origin-Destination) endpoint for efficient filtering
-      const endpoint = `/v2/Rail/TRA/DailyTrainTimetable/OD/${originStationId}/to/${destinationStationId}/${date}`;
+      if (!dateRangeResponse.ok) {
+        throw new Error(`Failed to fetch available dates: ${dateRangeResponse.status}`);
+      }
+      
+      const dateRange = await dateRangeResponse.json() as TDXDateRangeResponse;
+      const availableDates = dateRange.TrainDates || [];
+      
+      // Use today if no date specified, or validate requested date
+      let date = trainDate || new Date().toISOString().split('T')[0];
+      
+      // Validate date is within available range
+      if (trainDate && !availableDates.includes(trainDate)) {
+        console.error(`Requested date ${trainDate} is not available in TDX data. Available dates: ${dateRange.StartDate} to ${dateRange.EndDate}`);
+        date = new Date().toISOString().split('T')[0];
+        
+        // Double-check today is available, otherwise use first available date
+        if (!availableDates.includes(date) && availableDates.length > 0) {
+          date = availableDates[0];
+          console.error(`Using first available date: ${date}`);
+        }
+      }
+      
+      // Use v3 API endpoints for better data availability  
+      // Always use the date format - "Today" endpoint doesn't work for OD queries
+      const endpoint = `/v3/Rail/TRA/DailyTrainTimetable/OD/${originStationId}/to/${destinationStationId}/${date}`;
       
       const response = await fetch(`${baseUrl}${endpoint}?%24format=JSON`, {
         headers: {
@@ -433,25 +528,28 @@ class SmartTRAServer {
       if (!response.ok) {
         // Handle common API failure scenarios
         if (response.status === 404) {
-          console.log(`No timetable data found for route ${originStationId} → ${destinationStationId} on ${date}`);
+          console.error(`No timetable data found for route ${originStationId} → ${destinationStationId} on ${date}`);
           return []; // Return empty array for no data found
         }
         throw new Error(`Failed to fetch train timetable: ${response.status} ${response.statusText}`);
       }
 
-      const data = await response.json() as TRATrainTimetable[];
+      const responseData = await response.json() as TDXTrainTimetableResponse;
+      
+      // v3 API returns wrapped data structure
+      const data = responseData.TrainTimetables || [];
       
       // Handle data availability scenarios
       if (!data || data.length === 0) {
-        console.log(`No trains available for route ${originStationId} → ${destinationStationId} on ${date}`);
-        console.log('This could happen if:');
-        console.log('- No trains run on this route on the specified date');
-        console.log('- Trains are suspended due to maintenance or weather');
-        console.log('- Date is outside of available timetable data');
+        console.error(`No trains available for route ${originStationId} → ${destinationStationId} on ${date}`);
+        console.error('This could happen if:');
+        console.error('- No trains run on this route on the specified date');
+        console.error('- Trains are suspended due to maintenance or weather');
+        console.error('- Route does not exist or station IDs are incorrect');
         return [];
       }
       
-      console.log(`Retrieved ${data.length} trains for ${originStationId} → ${destinationStationId} on ${date}`);
+      console.error(`Retrieved ${data.length} trains for ${originStationId} → ${destinationStationId} on ${date}`);
       return data;
     } catch (error) {
       console.error('Error fetching train timetable:', error);
@@ -483,12 +581,12 @@ class SmartTRAServer {
       const stops = Math.abs(destinationIndex - originIndex) - 1; // Exclude origin and destination
       
       // Check if eligible for monthly pass (區間車, 區間快車)
-      const monthlyPassTrainTypes = ['10', '11']; // 區間車 (10), 區間快車 (11)
-      const isMonthlyPassEligible = monthlyPassTrainTypes.includes(train.TrainTypeID);
+      const monthlyPassTrainTypes = [MONTHLY_PASS_TRAIN_TYPES.LOCAL, MONTHLY_PASS_TRAIN_TYPES.FAST_LOCAL] as const;
+      const isMonthlyPassEligible = monthlyPassTrainTypes.includes(train.TrainInfo.TrainTypeCode as typeof monthlyPassTrainTypes[number]);
       
       results.push({
-        trainNo: train.TrainNo,
-        trainType: train.TrainTypeName.Zh_tw,
+        trainNo: train.TrainInfo.TrainNo,
+        trainType: train.TrainInfo.TrainTypeName.Zh_tw,
         origin: originStop.StationName.Zh_tw,
         destination: destinationStop.StationName.Zh_tw,
         departureTime,
@@ -544,23 +642,23 @@ class SmartTRAServer {
       });
 
       if (!response.ok) {
-        console.log(`Fare data not available for route ${originStationId} → ${destinationStationId} (${response.status})`);
+        console.error(`Fare data not available for route ${originStationId} → ${destinationStationId} (${response.status})`);
         return null;
       }
 
       const fareData = await response.json() as TDXFareResponse[];
       
       if (!Array.isArray(fareData) || fareData.length === 0) {
-        console.log(`No fare data found for route ${originStationId} → ${destinationStationId}`);
+        console.error(`No fare data found for route ${originStationId} → ${destinationStationId}`);
         return null;
       }
 
       // Process fare data to extract common ticket types
       const fareInfo = this.processFareData(fareData[0]);
-      console.log(`Retrieved fare data for ${originStationId} → ${destinationStationId}`);
+      console.error(`Retrieved fare data for ${originStationId} → ${destinationStationId}`);
       return fareInfo;
     } catch (error) {
-      console.log(`Failed to get fare data for ${originStationId} → ${destinationStationId}:`, error instanceof Error ? error.message : String(error));
+      console.error(`Failed to get fare data for ${originStationId} → ${destinationStationId}:`, error instanceof Error ? error.message : String(error));
       return null; // Graceful fallback
     }
   }
@@ -652,27 +750,32 @@ class SmartTRAServer {
       });
 
       if (!response.ok) {
-        console.log(`Live data not available for station ${stationId} (${response.status})`);
+        console.error(`Live data not available for station ${stationId} (${response.status})`);
         return [];
       }
 
       const liveData = await response.json() as any[];
       
       if (!Array.isArray(liveData) || liveData.length === 0) {
-        console.log(`No live trains found for station ${stationId} - trains may not be running`);
+        console.error(`No live trains found for station ${stationId} - trains may not be running`);
         return [];
       }
       
-      console.log(`Found ${liveData.length} live trains for station ${stationId}`);
+      console.error(`Found ${liveData.length} live trains for station ${stationId}`);
       return liveData;
     } catch (error) {
-      console.log(`Failed to get live data for station ${stationId}:`, error instanceof Error ? error.message : String(error));
+      console.error(`Failed to get live data for station ${stationId}:`, error instanceof Error ? error.message : String(error));
       return []; // Graceful fallback - return empty array
     }
   }
 
   // Filter trains based on commuter preferences
-  private filterCommuterTrains(trains: TrainSearchResult[], preferences?: any): TrainSearchResult[] {
+  private filterCommuterTrains(
+    trains: TrainSearchResult[], 
+    preferences?: any,
+    targetDate?: string,
+    targetTime?: string
+  ): TrainSearchResult[] {
     let filtered = [...trains];
     
     // Default: Filter to monthly pass eligible trains only
@@ -680,24 +783,52 @@ class SmartTRAServer {
       filtered = filtered.filter(train => train.isMonthlyPassEligible);
     }
     
-    // Apply time window filtering (next 2 hours by default for commuters)
-    const now = new Date();
+    // Determine base time for filtering
+    let baseTime: Date;
+    if (targetDate && targetTime) {
+      // Use specified date and time
+      const [year, month, day] = targetDate.split('-').map(Number);
+      const [hours, minutes] = targetTime.split(':').map(Number);
+      baseTime = new Date(year, month - 1, day, hours, minutes, 0);
+    } else if (targetDate) {
+      // Use specified date with current time
+      const [year, month, day] = targetDate.split('-').map(Number);
+      const now = new Date();
+      baseTime = new Date(year, month - 1, day, now.getHours(), now.getMinutes(), 0);
+    } else {
+      // Use current date and time
+      baseTime = new Date();
+    }
+    
+    // Apply time window filtering
     const timeWindowHours = preferences?.timeWindowHours || 2;
-    const maxTime = new Date(now.getTime() + timeWindowHours * 60 * 60 * 1000);
+    // For user-specified times, show trains within window around that time
+    // Include trains from 1 hour before to timeWindowHours after
+    const minTime = new Date(baseTime.getTime() - 60 * 60 * 1000); // 1 hour before
+    const maxTime = new Date(baseTime.getTime() + timeWindowHours * 60 * 60 * 1000);
+    
+    // Create reference date for parsing train times
+    const referenceDate = targetDate ? new Date(targetDate + 'T00:00:00') : new Date();
     
     filtered = filtered.filter(train => {
-      const trainTime = this.parseTrainTime(train.departureTime);
-      return trainTime >= now && trainTime <= maxTime;
+      const trainTime = this.parseTrainTime(train.departureTime, referenceDate);
+      return trainTime >= minTime && trainTime <= maxTime;
     });
     
     // Add late indicators and status
+    // Use current time for departure warnings (not the target time)
+    const now = new Date();
     filtered = filtered.map(train => {
-      const trainTime = this.parseTrainTime(train.departureTime);
-      const minutesUntilDeparture = Math.round((trainTime.getTime() - now.getTime()) / (1000 * 60));
+      const trainTime = this.parseTrainTime(train.departureTime, referenceDate);
+      // Only show departure warnings if we're looking at today's trains
+      const isToday = !targetDate || targetDate === new Date().toISOString().split('T')[0];
+      const minutesUntilDeparture = isToday 
+        ? Math.round((trainTime.getTime() - now.getTime()) / (1000 * 60))
+        : Math.round((trainTime.getTime() - baseTime.getTime()) / (1000 * 60));
       
-      // Add late warning if departure is very soon
-      const isLate = minutesUntilDeparture <= 15 && minutesUntilDeparture > 0;
-      const hasLeft = minutesUntilDeparture <= 0;
+      // Add late warning only for today's trains
+      const isLate = isToday && minutesUntilDeparture <= 15 && minutesUntilDeparture > 0;
+      const hasLeft = isToday && minutesUntilDeparture <= 0;
       
       return {
         ...train,
@@ -719,11 +850,14 @@ class SmartTRAServer {
     const primaryResults = filtered.slice(0, preferences?.maxResults || 3);
     
     if (primaryResults.length < 3 && !preferences?.includeAllTrainTypes) {
+      const isToday = !targetDate || targetDate === new Date().toISOString().split('T')[0];
       const allTrains = trains.map(train => {
-        const trainTime = this.parseTrainTime(train.departureTime);
-        const minutesUntilDeparture = Math.round((trainTime.getTime() - now.getTime()) / (1000 * 60));
-        const isLate = minutesUntilDeparture <= 15 && minutesUntilDeparture > 0;
-        const hasLeft = minutesUntilDeparture <= 0;
+        const trainTime = this.parseTrainTime(train.departureTime, referenceDate);
+        const minutesUntilDeparture = isToday 
+          ? Math.round((trainTime.getTime() - now.getTime()) / (1000 * 60))
+          : Math.round((trainTime.getTime() - baseTime.getTime()) / (1000 * 60));
+        const isLate = isToday && minutesUntilDeparture <= 15 && minutesUntilDeparture > 0;
+        const hasLeft = isToday && minutesUntilDeparture <= 0;
         
         return {
           ...train,
@@ -735,8 +869,14 @@ class SmartTRAServer {
         };
       });
       
+      // Filter backup trains within the time window
       const backupTrains = allTrains
-        .filter(train => !train.isMonthlyPassEligible && train.minutesUntilDeparture > 0)
+        .filter(train => {
+          const trainTime = this.parseTrainTime(train.departureTime, referenceDate);
+          return !train.isMonthlyPassEligible && 
+                 trainTime >= minTime && 
+                 trainTime <= maxTime;
+        })
         .slice(0, 3 - primaryResults.length);
       
       return [...primaryResults, ...backupTrains];
@@ -795,7 +935,7 @@ class SmartTRAServer {
     this.lastStationLoadAttempt = now;
 
     try {
-      console.log('Loading TRA station data from TDX API...');
+      console.error('Loading TRA station data from TDX API...');
       const token = await this.getAccessToken();
       const baseUrl = process.env.TDX_BASE_URL || 'https://tdx.transportdata.tw/api/basic';
       
@@ -814,7 +954,7 @@ class SmartTRAServer {
       this.buildSearchIndexes();
       this.stationDataLoaded = true;
       this.stationLoadFailed = false;
-      console.log(`Loaded ${this.stationData.length} TRA stations from TDX API`);
+      console.error(`Loaded ${this.stationData.length} TRA stations from TDX API`);
     } catch (error) {
       console.error('Failed to load station data:', error);
       this.stationDataLoaded = false;
@@ -845,7 +985,7 @@ class SmartTRAServer {
       }
     }
 
-    console.log(`Built search indexes: ${this.stationNameIndex.size} names, ${this.stationPrefixIndex.size} prefixes`);
+    console.error(`Built search indexes: ${this.stationNameIndex.size} names, ${this.stationPrefixIndex.size} prefixes`);
   }
 
   private addToIndex(index: Map<string, TRAStation[]>, key: string, station: TRAStation): void {
@@ -1148,12 +1288,21 @@ class SmartTRAServer {
         fareInfo: fareInfo || undefined
       }));
       
-      const filteredResults = this.filterCommuterTrains(trainResultsWithFares, parsed.preferences);
+      const filteredResults = this.filterCommuterTrains(
+        trainResultsWithFares, 
+        parsed.preferences,
+        parsed.date,
+        parsed.time
+      );
 
       // Format response
       let responseText = `🚄 **Train Search Results**\n\n`;
       responseText += `**Route:** ${originStation.name} → ${destinationStation.name}\n`;
       responseText += `**Date:** ${parsed.date || 'Today'}\n`;
+      if (parsed.time) {
+        responseText += `**Target Time:** ${parsed.time}\n`;
+      }
+      
       responseText += `**Found:** ${filteredResults.length} trains (${timetableData.length} total)\n\n`;
 
       if (filteredResults.length === 0) {
@@ -1280,7 +1429,7 @@ class SmartTRAServer {
     if (originResults.length === 0) {
       return {
         valid: false,
-        message: `Cannot find origin station "${parsed.origin}". Try using full station names like "臺北" or "台中".`
+        message: `找不到出發車站 "${parsed.origin}"，請使用完整站名如「臺北」或「台中」`
       };
     }
 
@@ -1289,7 +1438,7 @@ class SmartTRAServer {
     if (destinationResults.length === 0) {
       return {
         valid: false,
-        message: `Cannot find destination station "${parsed.destination}". Try using full station names like "臺北" or "台中".`
+        message: `找不到目的車站 "${parsed.destination}"，請使用完整站名如「臺北」或「台中」`
       };
     }
 
@@ -1358,7 +1507,7 @@ class SmartTRAServer {
     
     const afterCount = this.requestCount.size;
     if (beforeCount !== afterCount) {
-      console.log(`Rate limit cleanup: removed ${beforeCount - afterCount} inactive clients`);
+      console.error(`Rate limit cleanup: removed ${beforeCount - afterCount} inactive clients`);
     }
   }
 
@@ -1366,12 +1515,12 @@ class SmartTRAServer {
     // Only set up shutdown handlers if not in test environment
     if (!isTestEnvironment()) {
       const gracefulShutdown = async (signal: string) => {
-        console.log(`Received ${signal}, starting graceful shutdown...`);
+        console.error(`Received ${signal}, starting graceful shutdown...`);
         this.isShuttingDown = true;
         
         // Give ongoing requests time to complete with proper timeout
         const shutdownTimer = setTimeout(() => {
-          console.log('Graceful shutdown timeout reached, forcing exit');
+          console.error('Graceful shutdown timeout reached, forcing exit');
           process.exit(1);
         }, this.GRACEFUL_SHUTDOWN_TIMEOUT);
         
@@ -1380,7 +1529,7 @@ class SmartTRAServer {
           // Wait a bit for current requests to finish
           await new Promise(resolve => setTimeout(resolve, 1000));
           clearTimeout(shutdownTimer);
-          console.log('Graceful shutdown complete');
+          console.error('Graceful shutdown complete');
           process.exit(0);
         } catch (error) {
           clearTimeout(shutdownTimer);
@@ -1397,7 +1546,7 @@ class SmartTRAServer {
   async start() {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.log('Smart TRA MCP Server started successfully');
+    console.error('Smart TRA MCP Server started successfully');
   }
 
   // Health check method for future use
