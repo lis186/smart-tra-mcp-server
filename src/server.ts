@@ -672,7 +672,12 @@ class SmartTRAServer {
   }
 
   // Filter trains based on commuter preferences
-  private filterCommuterTrains(trains: TrainSearchResult[], preferences?: any): TrainSearchResult[] {
+  private filterCommuterTrains(
+    trains: TrainSearchResult[], 
+    preferences?: any,
+    targetDate?: string,
+    targetTime?: string
+  ): TrainSearchResult[] {
     let filtered = [...trains];
     
     // Default: Filter to monthly pass eligible trains only
@@ -680,24 +685,52 @@ class SmartTRAServer {
       filtered = filtered.filter(train => train.isMonthlyPassEligible);
     }
     
-    // Apply time window filtering (next 2 hours by default for commuters)
-    const now = new Date();
+    // Determine base time for filtering
+    let baseTime: Date;
+    if (targetDate && targetTime) {
+      // Use specified date and time
+      const [year, month, day] = targetDate.split('-').map(Number);
+      const [hours, minutes] = targetTime.split(':').map(Number);
+      baseTime = new Date(year, month - 1, day, hours, minutes, 0);
+    } else if (targetDate) {
+      // Use specified date with current time
+      const [year, month, day] = targetDate.split('-').map(Number);
+      const now = new Date();
+      baseTime = new Date(year, month - 1, day, now.getHours(), now.getMinutes(), 0);
+    } else {
+      // Use current date and time
+      baseTime = new Date();
+    }
+    
+    // Apply time window filtering
     const timeWindowHours = preferences?.timeWindowHours || 2;
-    const maxTime = new Date(now.getTime() + timeWindowHours * 60 * 60 * 1000);
+    // For user-specified times, show trains within window around that time
+    // Include trains from 1 hour before to timeWindowHours after
+    const minTime = new Date(baseTime.getTime() - 60 * 60 * 1000); // 1 hour before
+    const maxTime = new Date(baseTime.getTime() + timeWindowHours * 60 * 60 * 1000);
+    
+    // Create reference date for parsing train times
+    const referenceDate = targetDate ? new Date(targetDate + 'T00:00:00') : new Date();
     
     filtered = filtered.filter(train => {
-      const trainTime = this.parseTrainTime(train.departureTime);
-      return trainTime >= now && trainTime <= maxTime;
+      const trainTime = this.parseTrainTime(train.departureTime, referenceDate);
+      return trainTime >= minTime && trainTime <= maxTime;
     });
     
     // Add late indicators and status
+    // Use current time for departure warnings (not the target time)
+    const now = new Date();
     filtered = filtered.map(train => {
-      const trainTime = this.parseTrainTime(train.departureTime);
-      const minutesUntilDeparture = Math.round((trainTime.getTime() - now.getTime()) / (1000 * 60));
+      const trainTime = this.parseTrainTime(train.departureTime, referenceDate);
+      // Only show departure warnings if we're looking at today's trains
+      const isToday = !targetDate || targetDate === new Date().toISOString().split('T')[0];
+      const minutesUntilDeparture = isToday 
+        ? Math.round((trainTime.getTime() - now.getTime()) / (1000 * 60))
+        : Math.round((trainTime.getTime() - baseTime.getTime()) / (1000 * 60));
       
-      // Add late warning if departure is very soon
-      const isLate = minutesUntilDeparture <= 15 && minutesUntilDeparture > 0;
-      const hasLeft = minutesUntilDeparture <= 0;
+      // Add late warning only for today's trains
+      const isLate = isToday && minutesUntilDeparture <= 15 && minutesUntilDeparture > 0;
+      const hasLeft = isToday && minutesUntilDeparture <= 0;
       
       return {
         ...train,
@@ -719,11 +752,14 @@ class SmartTRAServer {
     const primaryResults = filtered.slice(0, preferences?.maxResults || 3);
     
     if (primaryResults.length < 3 && !preferences?.includeAllTrainTypes) {
+      const isToday = !targetDate || targetDate === new Date().toISOString().split('T')[0];
       const allTrains = trains.map(train => {
-        const trainTime = this.parseTrainTime(train.departureTime);
-        const minutesUntilDeparture = Math.round((trainTime.getTime() - now.getTime()) / (1000 * 60));
-        const isLate = minutesUntilDeparture <= 15 && minutesUntilDeparture > 0;
-        const hasLeft = minutesUntilDeparture <= 0;
+        const trainTime = this.parseTrainTime(train.departureTime, referenceDate);
+        const minutesUntilDeparture = isToday 
+          ? Math.round((trainTime.getTime() - now.getTime()) / (1000 * 60))
+          : Math.round((trainTime.getTime() - baseTime.getTime()) / (1000 * 60));
+        const isLate = isToday && minutesUntilDeparture <= 15 && minutesUntilDeparture > 0;
+        const hasLeft = isToday && minutesUntilDeparture <= 0;
         
         return {
           ...train,
@@ -735,8 +771,14 @@ class SmartTRAServer {
         };
       });
       
+      // Filter backup trains within the time window
       const backupTrains = allTrains
-        .filter(train => !train.isMonthlyPassEligible && train.minutesUntilDeparture > 0)
+        .filter(train => {
+          const trainTime = this.parseTrainTime(train.departureTime, referenceDate);
+          return !train.isMonthlyPassEligible && 
+                 trainTime >= minTime && 
+                 trainTime <= maxTime;
+        })
         .slice(0, 3 - primaryResults.length);
       
       return [...primaryResults, ...backupTrains];
@@ -1148,12 +1190,20 @@ class SmartTRAServer {
         fareInfo: fareInfo || undefined
       }));
       
-      const filteredResults = this.filterCommuterTrains(trainResultsWithFares, parsed.preferences);
+      const filteredResults = this.filterCommuterTrains(
+        trainResultsWithFares, 
+        parsed.preferences,
+        parsed.date,
+        parsed.time
+      );
 
       // Format response
       let responseText = `🚄 **Train Search Results**\n\n`;
       responseText += `**Route:** ${originStation.name} → ${destinationStation.name}\n`;
       responseText += `**Date:** ${parsed.date || 'Today'}\n`;
+      if (parsed.time) {
+        responseText += `**Target Time:** ${parsed.time}\n`;
+      }
       responseText += `**Found:** ${filteredResults.length} trains (${timetableData.length} total)\n\n`;
 
       if (filteredResults.length === 0) {
