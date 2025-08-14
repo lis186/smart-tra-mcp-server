@@ -2,13 +2,17 @@
 export default {
   preset: 'ts-jest/presets/default-esm',
   extensionsToTreatAsEsm: ['.ts'],
-  testMatch: ['src/**/*.test.ts'],  // Only test files in src directory
+  testMatch: [
+    'tests/**/*.test.ts',
+    'src/**/*.test.ts'
+  ],
+  setupFilesAfterEnv: ['<rootDir>/tests/setup.ts'],
   transform: {
     '^.+\\.ts$': ['ts-jest', {
       useESM: true,
     }],
   },
-  moduleNameMapper: {  // Fixed typo: was moduleNameMapping
+  moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
   collectCoverageFrom: [
@@ -18,4 +22,5 @@ export default {
   ],
   coverageDirectory: 'coverage',
   testEnvironment: 'node',
+  testTimeout: 15000,  // Increased timeout for API tests
 };
