@@ -13,20 +13,19 @@ import { QueryParser, ParsedQuery } from './query-parser.js';
 // These train types are NOT eligible for TPASS monthly pass
 const TPASS_RESTRICTED_TRAIN_TYPES = {
   TAROKO: '1',         // 太魯閣號 (Taroko Express)
-  PUYUMA: '2',         // 普悠瑪號 (Puyuma Express)
-  BUSINESS: '3',       // 自強(商務) (Business Tze-Chiang) 
-  TEAM_TRAIN: '4',     // 團體列車 (Team Train)
-  DIESEL_TC: '5',      // 自強(柴聯) (Diesel Tze-Chiang)
-  FAST_LOCAL: '10',    // 區間快 (Fast Local) - Actually restricted
+  PUYUMA: '2',         // 普悠瑪號 (Puyuma Express) 
   EMU3000: '11'        // 新自強號 EMU3000 (New Tze-Chiang)
 } as const;
 
 // Common eligible train types for reference
+// Based on TDX documentation, all types except 1, 2, 11 are eligible
 const TPASS_ELIGIBLE_EXAMPLES = {
+  TZE_CHIANG: '3',     // 自強號 (Tze-Chiang) - includes business/push-pull models
+  CHU_KUANG: '4',      // 莒光號 (Chu-Kuang)
+  FU_HSING: '5',       // 復興號 (Fu-Hsing)
   LOCAL: '6',          // 區間車 (Local Train)
-  CHU_KUANG: '7',      // 莒光號 (Chu-Kuang)
-  FU_HSING: '8',       // 復興號 (Fu-Hsing)
-  TZE_CHIANG: '9'      // 自強號 (Tze-Chiang) - older push-pull models
+  ORDINARY: '7',       // 普快車 (Ordinary Train)
+  FAST_LOCAL: '10'     // 區間快 (Fast Local)
 } as const;
 
 const API_CONFIG = {
