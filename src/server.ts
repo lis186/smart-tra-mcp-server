@@ -438,7 +438,7 @@ class SmartTRAServer {
         }
       } catch (error) {
         // Log security event for malformed requests
-        console.error(`Security: Malformed request from session ${this.sessionId}:`, error instanceof Error ? error.message : String(error));
+        this.logError('Security: Malformed request detected', error, { sessionId: this.sessionId });
         throw error;
       }
 
@@ -618,7 +618,11 @@ class SmartTRAServer {
       });
       
       if (!dateRangeResponse.ok) {
-        throw new Error(`Failed to fetch available dates: ${dateRangeResponse.status}`);
+        this.logError('Failed to fetch available dates from TDX API', undefined, { 
+          status: dateRangeResponse.status, 
+          statusText: dateRangeResponse.statusText 
+        });
+        throw new Error('Service temporarily unavailable. Please try again later.');
       }
       
       const dateRange = await dateRangeResponse.json() as TDXDateRangeResponse;
@@ -656,7 +660,14 @@ class SmartTRAServer {
           console.error(`No timetable data found for route ${originStationId} → ${destinationStationId} on ${date}`);
           return []; // Return empty array for no data found
         }
-        throw new Error(`Failed to fetch train timetable: ${response.status} ${response.statusText}`);
+        this.logError('Failed to fetch train timetable from TDX API', undefined, { 
+          status: response.status, 
+          statusText: response.statusText,
+          originStationId,
+          destinationStationId,
+          date
+        });
+        throw new Error('Unable to retrieve train schedule. Please check your route and try again.');
       }
 
       const responseData = await response.json() as TDXTrainTimetableResponse;
@@ -801,7 +812,11 @@ class SmartTRAServer {
       });
 
       if (!response.ok) {
-        console.error(`Fare data not available for route ${originStationId} → ${destinationStationId} (${response.status})`);
+        this.logError('Fare data not available from TDX API', undefined, { 
+          originStationId, 
+          destinationStationId, 
+          status: response.status 
+        });
         return null;
       }
 
@@ -910,7 +925,7 @@ class SmartTRAServer {
     
     // Check cache first - return cached data if still valid
     const cached = this.liveDataCache.get(stationId);
-    if (cached && now < cached.expiresAt) {
+    if (cached && cached.data && now < cached.expiresAt) {
       console.error(`Using cached live data for station ${stationId} (${cached.data.size} trains)`);
       return new Map(cached.data); // Return a copy to prevent external modifications
     }
@@ -980,7 +995,7 @@ class SmartTRAServer {
       console.error(`Failed to get live data for station ${stationId}: [${categorizedError.category}] ${categorizedError.message}`);
       
       // Return cached data if available, even if expired, for network/temporary errors
-      if (cached && (categorizedError.category === ErrorCategory.NETWORK || 
+      if (cached && cached.data && (categorizedError.category === ErrorCategory.NETWORK || 
                     categorizedError.category === ErrorCategory.API_ERROR)) {
         console.error(`${categorizedError.category} error - falling back to cached data for station ${stationId}`);
         return new Map(cached.data);
@@ -1017,41 +1032,110 @@ class SmartTRAServer {
       filtered = filtered.filter(train => train.stops === 0);
     }
     
-    // Determine base time for filtering
+    // Determine base time for filtering with robust error handling
     let baseTime: Date;
-    if (targetDate && targetTime) {
-      // Use specified date and time
-      const [year, month, day] = targetDate.split('-').map(Number);
-      const [hours, minutes] = targetTime.split(':').map(Number);
-      baseTime = new Date(year, month - 1, day, hours, minutes, 0);
-    } else if (targetDate) {
-      // Use specified date with current time
-      const [year, month, day] = targetDate.split('-').map(Number);
-      const now = new Date();
-      baseTime = new Date(year, month - 1, day, now.getHours(), now.getMinutes(), 0);
-    } else {
-      // Use current date and time
+    try {
+      if (targetDate && targetTime) {
+        // Use specified date and time with validation
+        const dateMatch = targetDate.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+        const timeMatch = targetTime.match(/^(\d{1,2}):(\d{2})$/);
+        
+        if (!dateMatch || !timeMatch) {
+          throw new Error(`Invalid date/time format: ${targetDate} ${targetTime}`);
+        }
+        
+        const [, yearStr, monthStr, dayStr] = dateMatch;
+        const [, hoursStr, minutesStr] = timeMatch;
+        const year = parseInt(yearStr, 10);
+        const month = parseInt(monthStr, 10);
+        const day = parseInt(dayStr, 10);
+        const hours = parseInt(hoursStr, 10);
+        const minutes = parseInt(minutesStr, 10);
+        
+        // Validate ranges
+        if (month < 1 || month > 12 || day < 1 || day > 31 || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+          throw new Error(`Invalid date/time values: ${targetDate} ${targetTime}`);
+        }
+        
+        baseTime = new Date(year, month - 1, day, hours, minutes, 0);
+        
+        // Check if the created date is valid
+        if (isNaN(baseTime.getTime())) {
+          throw new Error(`Invalid date created: ${targetDate} ${targetTime}`);
+        }
+      } else if (targetDate) {
+        // Use specified date with current time with validation
+        const dateMatch = targetDate.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+        if (!dateMatch) {
+          throw new Error(`Invalid date format: ${targetDate}`);
+        }
+        
+        const [, yearStr, monthStr, dayStr] = dateMatch;
+        const year = parseInt(yearStr, 10);
+        const month = parseInt(monthStr, 10);
+        const day = parseInt(dayStr, 10);
+        
+        if (month < 1 || month > 12 || day < 1 || day > 31) {
+          throw new Error(`Invalid date values: ${targetDate}`);
+        }
+        
+        const now = new Date();
+        baseTime = new Date(year, month - 1, day, now.getHours(), now.getMinutes(), 0);
+        
+        if (isNaN(baseTime.getTime())) {
+          throw new Error(`Invalid date created: ${targetDate}`);
+        }
+      } else {
+        // Use current date and time
+        baseTime = new Date();
+      }
+    } catch (error) {
+      // Fallback to current time if date parsing fails
+      this.logError('Invalid date/time format, falling back to current time', error, { targetDate, targetTime });
       baseTime = new Date();
     }
     
-    // Apply time window filtering
-    const timeWindowHours = preferences?.timeWindowHours || TIME_CONSTANTS.DEFAULT_TIME_WINDOW_HOURS;
+    // Apply time window filtering with bounds checking
+    const timeWindowHours = Math.min(Math.max(preferences?.timeWindowHours || TIME_CONSTANTS.DEFAULT_TIME_WINDOW_HOURS, 1), TIME_CONSTANTS.HOURS_IN_DAY);
+    
     // For user-specified times, show trains within window around that time
     // Include trains from 1 hour before to timeWindowHours after
-    const minTime = new Date(baseTime.getTime() - TIME_CONSTANTS.TIME_LOOKBACK_HOURS * TIME_CONSTANTS.MILLISECONDS_PER_HOUR);
-    const maxTime = new Date(baseTime.getTime() + timeWindowHours * TIME_CONSTANTS.MILLISECONDS_PER_HOUR);
+    const lookbackMs = TIME_CONSTANTS.TIME_LOOKBACK_HOURS * TIME_CONSTANTS.MILLISECONDS_PER_HOUR;
+    const forwardMs = timeWindowHours * TIME_CONSTANTS.MILLISECONDS_PER_HOUR;
+    
+    const minTime = new Date(baseTime.getTime() - lookbackMs);
+    const maxTime = new Date(baseTime.getTime() + forwardMs);
     
     // Create reference date for parsing train times
     const referenceDate = targetDate ? new Date(targetDate + 'T00:00:00') : new Date();
     
-    filtered = filtered.filter(train => {
-      const trainTime = this.parseTrainTime(train.departureTime, referenceDate);
-      return trainTime >= minTime && trainTime <= maxTime;
-    });
+    // For late indicators and status calculations
+    const now = new Date();
+    
+    // Validate time window boundaries
+    if (isNaN(minTime.getTime()) || isNaN(maxTime.getTime())) {
+      this.logError('Invalid time window calculated', undefined, { 
+        baseTime: baseTime.toISOString(), 
+        timeWindowHours, 
+        minTime: minTime.toString(), 
+        maxTime: maxTime.toString() 
+      });
+      // Fallback to a simple 2-hour window from now
+      const fallbackMinTime = new Date(now.getTime() - TIME_CONSTANTS.MILLISECONDS_PER_HOUR);
+      const fallbackMaxTime = new Date(now.getTime() + TIME_CONSTANTS.DEFAULT_TIME_WINDOW_HOURS * TIME_CONSTANTS.MILLISECONDS_PER_HOUR);
+      filtered = filtered.filter(train => {
+        const trainTime = this.parseTrainTime(train.departureTime, referenceDate);
+        return trainTime >= fallbackMinTime && trainTime <= fallbackMaxTime;
+      });
+    } else {
+      // Normal time window filtering
+      filtered = filtered.filter(train => {
+        const trainTime = this.parseTrainTime(train.departureTime, referenceDate);
+        return trainTime >= minTime && trainTime <= maxTime;
+      });
+    }
     
     // Add late indicators and status
-    // Use current time for departure warnings (not the target time)
-    const now = new Date();
     filtered = filtered.map(train => {
       const trainTime = this.parseTrainTime(train.departureTime, referenceDate);
       // Only show departure warnings if we're looking at today's trains
@@ -1126,7 +1210,24 @@ class SmartTRAServer {
    * @returns Date object with proper date context
    */
   private parseTrainTime(timeString: string, referenceDate?: Date): Date {
-    const [hours, minutes, seconds] = timeString.split(':').map(Number);
+    // Validate time string format first
+    const timeMatch = timeString.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+    if (!timeMatch) {
+      this.logError('Invalid time format in parseTrainTime', undefined, { timeString });
+      // Return a date far in the future to exclude from filtering
+      return new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+    }
+    
+    const hours = parseInt(timeMatch[1], 10);
+    const minutes = parseInt(timeMatch[2], 10);
+    const seconds = timeMatch[3] ? parseInt(timeMatch[3], 10) : 0;
+    
+    // Validate time component ranges
+    if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59 || seconds < 0 || seconds > 59) {
+      this.logError('Invalid time values in parseTrainTime', undefined, { hours, minutes, seconds, timeString });
+      return new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+    }
+    
     const now = new Date();
     const refDate = referenceDate || now;
     
@@ -1137,21 +1238,36 @@ class SmartTRAServer {
       refDate.getDate(), 
       hours, 
       minutes, 
-      seconds || 0
+      seconds
     );
     
-    // Only adjust to next day if:
-    // 1. No explicit reference date was provided AND
-    // 2. The time has already passed today AND
-    // 3. We're dealing with today's schedule (not future dates)
+    // Validate the created date
+    if (isNaN(trainTime.getTime())) {
+      this.logError('Invalid date created in parseTrainTime', undefined, { 
+        refDate: refDate.toISOString(), 
+        hours, 
+        minutes, 
+        seconds, 
+        timeString 
+      });
+      return new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+    }
+    
+    // Handle midnight boundary cases more robustly
     if (!referenceDate && trainTime < now) {
-      const hoursDiff = now.getHours() - hours;
-      const EARLY_MORNING_THRESHOLD = 20; // Hours - if difference >20, it's likely early morning train tomorrow
-      const RECENT_DEPARTURE_THRESHOLD = 4; // Hours - if <4 hours in past, might be recent departure
+      const timeDiffMs = now.getTime() - trainTime.getTime();
+      const timeDiffHours = timeDiffMs / TIME_CONSTANTS.MILLISECONDS_PER_HOUR;
       
-      // If the time difference is significant, likely it's an early morning train tomorrow
-      // Otherwise, it might be a train that just departed
-      if (hoursDiff > EARLY_MORNING_THRESHOLD || (hoursDiff < 0 && Math.abs(hoursDiff) < RECENT_DEPARTURE_THRESHOLD)) {
+      // Improved logic for next-day trains:
+      // 1. If train time is in early morning (0-6) and current time is late (20-23), likely tomorrow
+      // 2. If time difference is > 18 hours, likely tomorrow  
+      // 3. If time difference is < 2 hours in past, might be recent departure (keep same day)
+      const isEarlyMorningTrain = hours >= 0 && hours <= 6;
+      const isLateNow = now.getHours() >= 20;
+      const isLikelyTomorrow = (isEarlyMorningTrain && isLateNow) || timeDiffHours > 18;
+      const isRecentDeparture = timeDiffHours < 2;
+      
+      if (isLikelyTomorrow && !isRecentDeparture) {
         trainTime.setDate(trainTime.getDate() + 1);
       }
     }
@@ -1241,7 +1357,11 @@ class SmartTRAServer {
       });
 
       if (!response.ok) {
-        throw new Error(`Failed to load station data: ${response.status} ${response.statusText}`);
+        this.logError('Failed to load station data from TDX API', undefined, { 
+          status: response.status, 
+          statusText: response.statusText 
+        });
+        throw new Error('Unable to load station information. Service may be temporarily unavailable.');
       }
 
       this.stationData = await response.json() as TRAStation[];
@@ -1473,7 +1593,7 @@ class SmartTRAServer {
       return {
         content: [{
           type: 'text',
-          text: `❌ Error searching stations: ${error instanceof Error ? error.message : String(error)}`
+          text: `❌ Unable to search stations. Please try again or check your query format.`
         }]
       };
     }
@@ -1585,7 +1705,7 @@ class SmartTRAServer {
       const trainResultsWithLiveData = trainResults.map(train => {
         const liveEntry = liveDelayData.get(train.trainNo);
         
-        if (liveEntry && liveEntry.DelayTime !== undefined) {
+        if (liveEntry && typeof liveEntry.DelayTime === 'number') {
           // Calculate actual times based on delay
           const actualDepartureTime = this.addMinutesToTime(train.departureTime, liveEntry.DelayTime);
           const actualArrivalTime = this.addMinutesToTime(train.arrivalTime, liveEntry.DelayTime);
@@ -1776,11 +1896,12 @@ class SmartTRAServer {
       return {
         content: [{
           type: 'text',
-          text: `❌ Error searching trains: ${error instanceof Error ? error.message : String(error)}\n\n` +
+          text: `❌ Unable to search trains at this time.\n\n` +
                 `This might be due to:\n` +
-                `• Network connectivity issues\n` +
-                `• TDX API service unavailable\n` +
-                `• Invalid station IDs or date format`
+                `• Service temporarily unavailable\n` +
+                `• Invalid station names or route\n` +
+                `• Network connection issues\n\n` +
+                `Please try again later or verify your station names.`
         }]
       };
     }
