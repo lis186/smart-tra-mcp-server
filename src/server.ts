@@ -18,11 +18,14 @@ const TPASS_RESTRICTED_TRAIN_TYPES = {
 } as const;
 
 // Common eligible train types for reference
+// Based on TDX documentation, all types except 1, 2, 11 are eligible
 const TPASS_ELIGIBLE_EXAMPLES = {
-  LOCAL: '10',         // 區間車 (Local)
-  FAST_LOCAL: '12',    // 區間快車 (Fast Local) - Note: corrected from '11'
-  CHU_KUANG: '110',    // 莒光號 (Chu-Kuang)
-  TZE_CHIANG: '112'    // 自強號 (Tze-Chiang) - older models
+  TZE_CHIANG: '3',     // 自強號 (Tze-Chiang) - includes business/push-pull models
+  CHU_KUANG: '4',      // 莒光號 (Chu-Kuang)
+  FU_HSING: '5',       // 復興號 (Fu-Hsing)
+  LOCAL: '6',          // 區間車 (Local Train)
+  ORDINARY: '7',       // 普快車 (Ordinary Train)
+  FAST_LOCAL: '10'     // 區間快 (Fast Local)
 } as const;
 
 const API_CONFIG = {
@@ -33,6 +36,51 @@ const API_CONFIG = {
   MAX_REQUESTS_PER_WINDOW: 50,
   MAX_QUERY_LENGTH: 500,
   MAX_CONTEXT_LENGTH: 200
+} as const;
+
+// Time and data quality constants
+const TIME_CONSTANTS = {
+  DEFAULT_TIME_WINDOW_HOURS: 2,
+  MAX_REASONABLE_TRAVEL_HOURS: 6,     // Filter out abnormal travel times
+  TIME_LOOKBACK_HOURS: 1,             // Show trains 1 hour before target time
+  MILLISECONDS_PER_HOUR: 60 * 60 * 1000,
+  HOURS_IN_DAY: 24,
+  LATE_WARNING_MINUTES: 15,           // Show warning when train departs in 15 minutes
+  EPOCH_DATE_PREFIX: '1970-01-01T',   // Used for time calculations
+  TOKEN_SAFETY_BUFFER_SECONDS: 300,   // 5 minutes in seconds for token refresh
+  FAR_FUTURE_DAYS: 365                // Days in the future for invalid date fallback
+} as const;
+
+// HTTP and API constants
+const HTTP_CONSTANTS = {
+  NOT_FOUND: 404,
+  SESSION_ID_LENGTH: 9               // Length of random session ID suffix
+} as const;
+
+// Memory management constants
+const MEMORY_CONSTANTS = {
+  MAX_CACHE_ENTRIES: 1000,           // Maximum entries in live data cache
+  CACHE_CLEANUP_INTERVAL: 5 * 60 * 1000, // 5 minutes between cache cleanups
+  MAX_TRAINS_PER_RESULT: 50,         // Limit train results to prevent memory bloat
+  MAX_STATION_SEARCH_RESULTS: 10     // Limit station search results
+} as const;
+
+// Validation constants for input bounds
+const VALIDATION_BOUNDS = {
+  YEAR_MIN: 2020,                    // Minimum valid year for train dates
+  YEAR_MAX: 2030,                    // Maximum valid year for train dates
+  MONTH_MIN: 1,
+  MONTH_MAX: 12,
+  DAY_MIN: 1,
+  DAY_MAX: 31,
+  HOUR_MIN: 0,
+  HOUR_MAX: 23,
+  MINUTE_MIN: 0,
+  MINUTE_MAX: 59,
+  SECOND_MIN: 0,
+  SECOND_MAX: 59,
+  TIME_WINDOW_MIN: 1,                // Minimum time window in hours
+  TIME_WINDOW_MAX: 24                // Maximum time window in hours
 } as const;
 
 // Load environment variables - needed for TDX API credentials
@@ -100,6 +148,13 @@ interface CategorizedError {
   message: string;
   originalError?: Error;
   context?: Record<string, any>;
+}
+
+interface MCPToolResponse {
+  content: Array<{
+    type: 'text';
+    text: string;
+  }>;
 }
 
 class TRAError extends Error {
@@ -302,10 +357,17 @@ class SmartTRAServer {
   private readonly RATE_LIMIT_WINDOW = API_CONFIG.RATE_LIMIT_WINDOW;
   private readonly RATE_LIMIT_MAX_REQUESTS = API_CONFIG.MAX_REQUESTS_PER_WINDOW;
   private readonly GRACEFUL_SHUTDOWN_TIMEOUT = 5000; // 5 seconds
+  
+  // Pre-compiled regex patterns for performance optimization
+  private readonly REGEX_PATTERNS = {
+    ISO_DATE: /^(\d{4})-(\d{1,2})-(\d{1,2})$/,
+    TIME_FORMAT: /^(\d{1,2}):(\d{2})$/,
+    TIME_WITH_SECONDS: /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/
+  } as const;
 
   constructor() {
     // Generate unique session identifier for rate limiting
-    this.sessionId = `pid-${process.pid}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    this.sessionId = `pid-${process.pid}-${Date.now()}-${Math.random().toString(36).substr(2, HTTP_CONSTANTS.SESSION_ID_LENGTH)}`;
     
     // Initialize query parser
     this.queryParser = new QueryParser();
@@ -419,7 +481,7 @@ class SmartTRAServer {
         }
       } catch (error) {
         // Log security event for malformed requests
-        console.error(`Security: Malformed request from session ${this.sessionId}:`, error instanceof Error ? error.message : String(error));
+        this.logError('Security: Malformed request detected', error, { sessionId: this.sessionId });
         throw error;
       }
 
@@ -574,7 +636,7 @@ class SmartTRAServer {
     const tokenData = await response.json() as TokenResponse;
     
     // Cache the token (expires in 24 hours minus 5 minutes for safety)
-    const expiresAt = Date.now() + (tokenData.expires_in - 300) * 1000;
+    const expiresAt = Date.now() + (tokenData.expires_in - TIME_CONSTANTS.TOKEN_SAFETY_BUFFER_SECONDS) * 1000;
     this.tokenCache = {
       token: tokenData.access_token,
       expiresAt
@@ -599,7 +661,11 @@ class SmartTRAServer {
       });
       
       if (!dateRangeResponse.ok) {
-        throw new Error(`Failed to fetch available dates: ${dateRangeResponse.status}`);
+        this.logError('Failed to fetch available dates from TDX API', undefined, { 
+          status: dateRangeResponse.status, 
+          statusText: dateRangeResponse.statusText 
+        });
+        throw new Error('Service temporarily unavailable. Please try again later.');
       }
       
       const dateRange = await dateRangeResponse.json() as TDXDateRangeResponse;
@@ -633,17 +699,24 @@ class SmartTRAServer {
 
       if (!response.ok) {
         // Handle common API failure scenarios
-        if (response.status === 404) {
+        if (response.status === HTTP_CONSTANTS.NOT_FOUND) {
           console.error(`No timetable data found for route ${originStationId} → ${destinationStationId} on ${date}`);
           return []; // Return empty array for no data found
         }
-        throw new Error(`Failed to fetch train timetable: ${response.status} ${response.statusText}`);
+        this.logError('Failed to fetch train timetable from TDX API', undefined, { 
+          status: response.status, 
+          statusText: response.statusText,
+          originStationId,
+          destinationStationId,
+          date
+        });
+        throw new Error('Unable to retrieve train schedule. Please check your route and try again.');
       }
 
       const responseData = await response.json() as TDXTrainTimetableResponse;
       
-      // v3 API returns wrapped data structure
-      const data = responseData.TrainTimetables || [];
+      // v3 API returns wrapped data structure - limit results to prevent memory issues
+      const data = (responseData.TrainTimetables || []).slice(0, MEMORY_CONSTANTS.MAX_TRAINS_PER_RESULT);
       
       // Handle data availability scenarios
       if (!data || data.length === 0) {
@@ -681,6 +754,19 @@ class SmartTRAServer {
       const arrivalTime = destinationStop.ArrivalTime || destinationStop.DepartureTime;
       const travelTime = this.calculateTravelTime(departureTime, arrivalTime);
       
+      // Data quality check: Skip trains with abnormally long travel times
+      // Taipei to Taichung should never take more than 5 hours
+      // This filters out bad data from TDX API
+      const travelTimeHours = this.getTravelTimeInHours(departureTime, arrivalTime);
+      if (travelTimeHours > TIME_CONSTANTS.MAX_REASONABLE_TRAVEL_HOURS) {
+        this.logError(`Skipping train due to abnormal travel time`, undefined, {
+          trainNo: train.TrainInfo.TrainNo,
+          travelTimeHours,
+          threshold: TIME_CONSTANTS.MAX_REASONABLE_TRAVEL_HOURS
+        });
+        continue;
+      }
+      
       // Count intermediate stops
       // Note: OD endpoint only returns origin and destination stops, so we use StopSequence
       // to calculate the actual number of intermediate stations
@@ -712,8 +798,8 @@ class SmartTRAServer {
   // Calculate travel time between two time strings
   private calculateTravelTime(departureTime: string, arrivalTime: string): string {
     try {
-      const departure = new Date(`1970-01-01T${departureTime}`);
-      const arrival = new Date(`1970-01-01T${arrivalTime}`);
+      const departure = new Date(`${TIME_CONSTANTS.EPOCH_DATE_PREFIX}${departureTime}`);
+      const arrival = new Date(`${TIME_CONSTANTS.EPOCH_DATE_PREFIX}${arrivalTime}`);
       
       // Handle next-day arrivals
       if (arrival < departure) {
@@ -731,6 +817,24 @@ class SmartTRAServer {
       }
     } catch (error) {
       return '未知';
+    }
+  }
+  
+  // Get travel time in hours for data quality checks
+  private getTravelTimeInHours(departureTime: string, arrivalTime: string): number {
+    try {
+      const departure = new Date(`${TIME_CONSTANTS.EPOCH_DATE_PREFIX}${departureTime}`);
+      const arrival = new Date(`${TIME_CONSTANTS.EPOCH_DATE_PREFIX}${arrivalTime}`);
+      
+      // Handle next-day arrivals
+      if (arrival < departure) {
+        arrival.setDate(arrival.getDate() + 1);
+      }
+      
+      const diffMs = arrival.getTime() - departure.getTime();
+      return diffMs / (1000 * 60 * 60);
+    } catch (error) {
+      return 0;
     }
   }
 
@@ -751,7 +855,11 @@ class SmartTRAServer {
       });
 
       if (!response.ok) {
-        console.error(`Fare data not available for route ${originStationId} → ${destinationStationId} (${response.status})`);
+        this.logError('Fare data not available from TDX API', undefined, { 
+          originStationId, 
+          destinationStationId, 
+          status: response.status 
+        });
         return null;
       }
 
@@ -767,7 +875,11 @@ class SmartTRAServer {
       console.error(`Retrieved fare data for ${originStationId} → ${destinationStationId}`);
       return fareInfo;
     } catch (error) {
-      console.error(`Failed to get fare data for ${originStationId} → ${destinationStationId}:`, error instanceof Error ? error.message : String(error));
+      this.logError('Failed to get fare data', error, { 
+        originStationId, 
+        destinationStationId,
+        operation: 'getODFare'
+      });
       return null; // Graceful fallback
     }
   }
@@ -856,7 +968,7 @@ class SmartTRAServer {
     
     // Check cache first - return cached data if still valid
     const cached = this.liveDataCache.get(stationId);
-    if (cached && now < cached.expiresAt) {
+    if (cached && cached.data && now < cached.expiresAt) {
       console.error(`Using cached live data for station ${stationId} (${cached.data.size} trains)`);
       return new Map(cached.data); // Return a copy to prevent external modifications
     }
@@ -926,7 +1038,7 @@ class SmartTRAServer {
       console.error(`Failed to get live data for station ${stationId}: [${categorizedError.category}] ${categorizedError.message}`);
       
       // Return cached data if available, even if expired, for network/temporary errors
-      if (cached && (categorizedError.category === ErrorCategory.NETWORK || 
+      if (cached && cached.data && (categorizedError.category === ErrorCategory.NETWORK || 
                     categorizedError.category === ErrorCategory.API_ERROR)) {
         console.error(`${categorizedError.category} error - falling back to cached data for station ${stationId}`);
         return new Map(cached.data);
@@ -939,7 +1051,15 @@ class SmartTRAServer {
   // Filter trains based on commuter preferences
   private filterCommuterTrains(
     trains: TrainSearchResult[], 
-    preferences?: any,
+    preferences?: {
+      fastest?: boolean;
+      cheapest?: boolean;
+      directOnly?: boolean;
+      trainType?: string;
+      timeWindowHours?: number;
+      includeAllTrainTypes?: boolean;
+      maxResults?: number;
+    },
     targetDate?: string,
     targetTime?: string
   ): TrainSearchResult[] {
@@ -955,41 +1075,116 @@ class SmartTRAServer {
       filtered = filtered.filter(train => train.stops === 0);
     }
     
-    // Determine base time for filtering
+    // Determine base time for filtering with robust error handling
     let baseTime: Date;
-    if (targetDate && targetTime) {
-      // Use specified date and time
-      const [year, month, day] = targetDate.split('-').map(Number);
-      const [hours, minutes] = targetTime.split(':').map(Number);
-      baseTime = new Date(year, month - 1, day, hours, minutes, 0);
-    } else if (targetDate) {
-      // Use specified date with current time
-      const [year, month, day] = targetDate.split('-').map(Number);
-      const now = new Date();
-      baseTime = new Date(year, month - 1, day, now.getHours(), now.getMinutes(), 0);
-    } else {
-      // Use current date and time
+    try {
+      if (targetDate && targetTime) {
+        // Use specified date and time with validation - using pre-compiled patterns
+        const dateMatch = targetDate.match(this.REGEX_PATTERNS.ISO_DATE);
+        const timeMatch = targetTime.match(this.REGEX_PATTERNS.TIME_FORMAT);
+        
+        if (!dateMatch || !timeMatch) {
+          throw new Error(`Invalid date/time format: ${targetDate} ${targetTime}`);
+        }
+        
+        const [, yearStr, monthStr, dayStr] = dateMatch;
+        const [, hoursStr, minutesStr] = timeMatch;
+        const year = parseInt(yearStr, 10);
+        const month = parseInt(monthStr, 10);
+        const day = parseInt(dayStr, 10);
+        const hours = parseInt(hoursStr, 10);
+        const minutes = parseInt(minutesStr, 10);
+        
+        // Validate ranges with named constants
+        if (year < VALIDATION_BOUNDS.YEAR_MIN || year > VALIDATION_BOUNDS.YEAR_MAX ||
+            month < VALIDATION_BOUNDS.MONTH_MIN || month > VALIDATION_BOUNDS.MONTH_MAX ||
+            day < VALIDATION_BOUNDS.DAY_MIN || day > VALIDATION_BOUNDS.DAY_MAX ||
+            hours < VALIDATION_BOUNDS.HOUR_MIN || hours > VALIDATION_BOUNDS.HOUR_MAX ||
+            minutes < VALIDATION_BOUNDS.MINUTE_MIN || minutes > VALIDATION_BOUNDS.MINUTE_MAX) {
+          throw new Error(`Invalid date/time values: ${targetDate} ${targetTime}`);
+        }
+        
+        baseTime = new Date(year, month - 1, day, hours, minutes, 0);
+        
+        // Check if the created date is valid
+        if (isNaN(baseTime.getTime())) {
+          throw new Error(`Invalid date created: ${targetDate} ${targetTime}`);
+        }
+      } else if (targetDate) {
+        // Use specified date with current time with validation - using pre-compiled pattern
+        const dateMatch = targetDate.match(this.REGEX_PATTERNS.ISO_DATE);
+        if (!dateMatch) {
+          throw new Error(`Invalid date format: ${targetDate}`);
+        }
+        
+        const [, yearStr, monthStr, dayStr] = dateMatch;
+        const year = parseInt(yearStr, 10);
+        const month = parseInt(monthStr, 10);
+        const day = parseInt(dayStr, 10);
+        
+        if (year < VALIDATION_BOUNDS.YEAR_MIN || year > VALIDATION_BOUNDS.YEAR_MAX ||
+            month < VALIDATION_BOUNDS.MONTH_MIN || month > VALIDATION_BOUNDS.MONTH_MAX ||
+            day < VALIDATION_BOUNDS.DAY_MIN || day > VALIDATION_BOUNDS.DAY_MAX) {
+          throw new Error(`Invalid date values: ${targetDate}`);
+        }
+        
+        const now = new Date();
+        baseTime = new Date(year, month - 1, day, now.getHours(), now.getMinutes(), 0);
+        
+        if (isNaN(baseTime.getTime())) {
+          throw new Error(`Invalid date created: ${targetDate}`);
+        }
+      } else {
+        // Use current date and time
+        baseTime = new Date();
+      }
+    } catch (error) {
+      // Fallback to current time if date parsing fails
+      this.logError('Invalid date/time format, falling back to current time', error, { targetDate, targetTime });
       baseTime = new Date();
     }
     
-    // Apply time window filtering
-    const timeWindowHours = preferences?.timeWindowHours || 2;
+    // Apply time window filtering with bounds checking using validation constants
+    const timeWindowHours = Math.min(Math.max(preferences?.timeWindowHours || TIME_CONSTANTS.DEFAULT_TIME_WINDOW_HOURS, VALIDATION_BOUNDS.TIME_WINDOW_MIN), VALIDATION_BOUNDS.TIME_WINDOW_MAX);
+    
     // For user-specified times, show trains within window around that time
     // Include trains from 1 hour before to timeWindowHours after
-    const minTime = new Date(baseTime.getTime() - 60 * 60 * 1000); // 1 hour before
-    const maxTime = new Date(baseTime.getTime() + timeWindowHours * 60 * 60 * 1000);
+    const lookbackMs = TIME_CONSTANTS.TIME_LOOKBACK_HOURS * TIME_CONSTANTS.MILLISECONDS_PER_HOUR;
+    const forwardMs = timeWindowHours * TIME_CONSTANTS.MILLISECONDS_PER_HOUR;
+    
+    const minTime = new Date(baseTime.getTime() - lookbackMs);
+    const maxTime = new Date(baseTime.getTime() + forwardMs);
     
     // Create reference date for parsing train times
     const referenceDate = targetDate ? new Date(targetDate + 'T00:00:00') : new Date();
     
-    filtered = filtered.filter(train => {
-      const trainTime = this.parseTrainTime(train.departureTime, referenceDate);
-      return trainTime >= minTime && trainTime <= maxTime;
-    });
+    // For late indicators and status calculations
+    const now = new Date();
+    
+    // Validate time window boundaries
+    if (isNaN(minTime.getTime()) || isNaN(maxTime.getTime())) {
+      this.logError('Invalid time window calculated', undefined, { 
+        baseTime: baseTime.toISOString(), 
+        timeWindowHours, 
+        minTime: minTime.toString(), 
+        maxTime: maxTime.toString() 
+      });
+      // Fallback to a simple 2-hour window from now
+      const fallbackMinTime = new Date(now.getTime() - TIME_CONSTANTS.MILLISECONDS_PER_HOUR);
+      const fallbackMaxTime = new Date(now.getTime() + TIME_CONSTANTS.DEFAULT_TIME_WINDOW_HOURS * TIME_CONSTANTS.MILLISECONDS_PER_HOUR);
+      filtered = filtered.filter(train => {
+        const trainTime = this.parseTrainTime(train.departureTime, referenceDate);
+        return trainTime >= fallbackMinTime && trainTime <= fallbackMaxTime;
+      });
+    } else {
+      // Normal time window filtering
+      filtered = filtered.filter(train => {
+        const trainTime = this.parseTrainTime(train.departureTime, referenceDate);
+        return trainTime >= minTime && trainTime <= maxTime;
+      });
+    }
     
     // Add late indicators and status
-    // Use current time for departure warnings (not the target time)
-    const now = new Date();
     filtered = filtered.map(train => {
       const trainTime = this.parseTrainTime(train.departureTime, referenceDate);
       // Only show departure warnings if we're looking at today's trains
@@ -999,7 +1194,7 @@ class SmartTRAServer {
         : Math.round((trainTime.getTime() - baseTime.getTime()) / (1000 * 60));
       
       // Add late warning only for today's trains
-      const isLate = isToday && minutesUntilDeparture <= 15 && minutesUntilDeparture > 0;
+      const isLate = isToday && minutesUntilDeparture <= TIME_CONSTANTS.LATE_WARNING_MINUTES && minutesUntilDeparture > 0;
       const hasLeft = isToday && minutesUntilDeparture <= 0;
       
       return {
@@ -1028,7 +1223,7 @@ class SmartTRAServer {
         const minutesUntilDeparture = isToday 
           ? Math.round((trainTime.getTime() - now.getTime()) / (1000 * 60))
           : Math.round((trainTime.getTime() - baseTime.getTime()) / (1000 * 60));
-        const isLate = isToday && minutesUntilDeparture <= 15 && minutesUntilDeparture > 0;
+        const isLate = isToday && minutesUntilDeparture <= TIME_CONSTANTS.LATE_WARNING_MINUTES && minutesUntilDeparture > 0;
         const hasLeft = isToday && minutesUntilDeparture <= 0;
         
         return {
@@ -1064,7 +1259,26 @@ class SmartTRAServer {
    * @returns Date object with proper date context
    */
   private parseTrainTime(timeString: string, referenceDate?: Date): Date {
-    const [hours, minutes, seconds] = timeString.split(':').map(Number);
+    // Validate time string format first - using pre-compiled pattern
+    const timeMatch = timeString.match(this.REGEX_PATTERNS.TIME_WITH_SECONDS);
+    if (!timeMatch) {
+      this.logError('Invalid time format in parseTrainTime', undefined, { timeString });
+      // Return a date far in the future to exclude from filtering
+      return new Date(Date.now() + TIME_CONSTANTS.FAR_FUTURE_DAYS * TIME_CONSTANTS.HOURS_IN_DAY * TIME_CONSTANTS.MILLISECONDS_PER_HOUR);
+    }
+    
+    const hours = parseInt(timeMatch[1], 10);
+    const minutes = parseInt(timeMatch[2], 10);
+    const seconds = timeMatch[3] ? parseInt(timeMatch[3], 10) : 0;
+    
+    // Validate time component ranges using validation constants
+    if (hours < VALIDATION_BOUNDS.HOUR_MIN || hours > VALIDATION_BOUNDS.HOUR_MAX ||
+        minutes < VALIDATION_BOUNDS.MINUTE_MIN || minutes > VALIDATION_BOUNDS.MINUTE_MAX ||
+        seconds < VALIDATION_BOUNDS.SECOND_MIN || seconds > VALIDATION_BOUNDS.SECOND_MAX) {
+      this.logError('Invalid time values in parseTrainTime', undefined, { hours, minutes, seconds, timeString });
+      return new Date(Date.now() + TIME_CONSTANTS.FAR_FUTURE_DAYS * TIME_CONSTANTS.HOURS_IN_DAY * TIME_CONSTANTS.MILLISECONDS_PER_HOUR);
+    }
+    
     const now = new Date();
     const refDate = referenceDate || now;
     
@@ -1075,18 +1289,36 @@ class SmartTRAServer {
       refDate.getDate(), 
       hours, 
       minutes, 
-      seconds || 0
+      seconds
     );
     
-    // Only adjust to next day if:
-    // 1. No explicit reference date was provided AND
-    // 2. The time has already passed today AND
-    // 3. We're dealing with today's schedule (not future dates)
+    // Validate the created date
+    if (isNaN(trainTime.getTime())) {
+      this.logError('Invalid date created in parseTrainTime', undefined, { 
+        refDate: refDate.toISOString(), 
+        hours, 
+        minutes, 
+        seconds, 
+        timeString 
+      });
+      return new Date(Date.now() + TIME_CONSTANTS.FAR_FUTURE_DAYS * TIME_CONSTANTS.HOURS_IN_DAY * TIME_CONSTANTS.MILLISECONDS_PER_HOUR);
+    }
+    
+    // Handle midnight boundary cases more robustly
     if (!referenceDate && trainTime < now) {
-      const hoursDiff = now.getHours() - hours;
-      // If the time difference is significant (>20 hours), likely it's an early morning train tomorrow
-      // Otherwise, it might be a train that just departed
-      if (hoursDiff > 20 || (hoursDiff < 0 && Math.abs(hoursDiff) < 4)) {
+      const timeDiffMs = now.getTime() - trainTime.getTime();
+      const timeDiffHours = timeDiffMs / TIME_CONSTANTS.MILLISECONDS_PER_HOUR;
+      
+      // Improved logic for next-day trains:
+      // 1. If train time is in early morning (0-6) and current time is late (20-23), likely tomorrow
+      // 2. If time difference is > 18 hours, likely tomorrow  
+      // 3. If time difference is < 2 hours in past, might be recent departure (keep same day)
+      const isEarlyMorningTrain = hours >= 0 && hours <= 6;
+      const isLateNow = now.getHours() >= 20;
+      const isLikelyTomorrow = (isEarlyMorningTrain && isLateNow) || timeDiffHours > 18;
+      const isRecentDeparture = timeDiffHours < 2;
+      
+      if (isLikelyTomorrow && !isRecentDeparture) {
         trainTime.setDate(trainTime.getDate() + 1);
       }
     }
@@ -1176,7 +1408,11 @@ class SmartTRAServer {
       });
 
       if (!response.ok) {
-        throw new Error(`Failed to load station data: ${response.status} ${response.statusText}`);
+        this.logError('Failed to load station data from TDX API', undefined, { 
+          status: response.status, 
+          statusText: response.statusText 
+        });
+        throw new Error('Unable to load station information. Service may be temporarily unavailable.');
       }
 
       this.stationData = await response.json() as TRAStation[];
@@ -1300,7 +1536,7 @@ class SmartTRAServer {
     });
 
     // Return top 5 matches
-    return finalResults.slice(0, 5);
+    return finalResults.slice(0, MEMORY_CONSTANTS.MAX_STATION_SEARCH_RESULTS);
   }
 
   private addSearchResult(results: Map<string, StationSearchResult>, station: TRAStation, confidence: number): void {
@@ -1404,11 +1640,11 @@ class SmartTRAServer {
       };
 
     } catch (error) {
-      console.error('Error in handleSearchStation:', error);
+      this.logError('Error in handleSearchStation', error, { query, context });
       return {
         content: [{
           type: 'text',
-          text: `❌ Error searching stations: ${error instanceof Error ? error.message : String(error)}`
+          text: `❌ Unable to search stations. Please try again or check your query format.`
         }]
       };
     }
@@ -1520,7 +1756,7 @@ class SmartTRAServer {
       const trainResultsWithLiveData = trainResults.map(train => {
         const liveEntry = liveDelayData.get(train.trainNo);
         
-        if (liveEntry && liveEntry.DelayTime !== undefined) {
+        if (liveEntry && typeof liveEntry.DelayTime === 'number') {
           // Calculate actual times based on delay
           const actualDepartureTime = this.addMinutesToTime(train.departureTime, liveEntry.DelayTime);
           const actualArrivalTime = this.addMinutesToTime(train.arrivalTime, liveEntry.DelayTime);
@@ -1569,7 +1805,12 @@ class SmartTRAServer {
         const backupTrains = filteredResults.filter(train => train.isBackupOption);
         
         if (primaryTrains.length > 0) {
-          responseText += `**月票可搭 (接下來2小時):**\n\n`;
+          // Show appropriate time window message based on whether a specific time was given
+          const actualTimeWindow = parsed.preferences?.timeWindowHours || 2;
+          const timeWindowMessage = parsed.time 
+            ? `目標時間 ${parsed.time} 前後` 
+            : `接下來${actualTimeWindow}小時`;
+          responseText += `**月票可搭 (${timeWindowMessage}):**\n\n`;
           primaryTrains.forEach((train, index) => {
             const passIcon = train.isMonthlyPassEligible ? '🎫' : '💰';
             
@@ -1645,7 +1886,14 @@ class SmartTRAServer {
         }
 
         responseText += `🎫 = 月票可搭 | 💰 = 需另購票 | ⚠️ = 即將發車 | 🚨 = 誤點 | ✅ = 準點\n`;
-        responseText += `時間視窗: 接下來2小時 | 可用 "接下來4小時" 擴展搜尋\n\n`;
+        
+        // Show appropriate time window help text
+        const actualTimeWindow = parsed.preferences?.timeWindowHours || 2;
+        if (parsed.time) {
+          responseText += `時間視窗: 目標時間前1小時到後${actualTimeWindow}小時 | 可用 "接下來4小時" 擴展搜尋\n\n`;
+        } else {
+          responseText += `時間視窗: 接下來${actualTimeWindow}小時 | 可用 "接下來4小時" 擴展搜尋\n\n`;
+        }
         
         // Add fare summary if available
         if (fareInfo) {
@@ -1695,15 +1943,16 @@ class SmartTRAServer {
       };
 
     } catch (error) {
-      console.error('Error in handleSearchTrains:', error);
+      this.logError('Error in handleSearchTrains', error, { query, context });
       return {
         content: [{
           type: 'text',
-          text: `❌ Error searching trains: ${error instanceof Error ? error.message : String(error)}\n\n` +
+          text: `❌ Unable to search trains at this time.\n\n` +
                 `This might be due to:\n` +
-                `• Network connectivity issues\n` +
-                `• TDX API service unavailable\n` +
-                `• Invalid station IDs or date format`
+                `• Service temporarily unavailable\n` +
+                `• Invalid station names or route\n` +
+                `• Network connection issues\n\n` +
+                `Please try again later or verify your station names.`
         }]
       };
     }
@@ -1737,8 +1986,8 @@ class SmartTRAServer {
       this.lastRateLimitCleanup = now;
     }
     
-    // Periodic cache cleanup (every 2 minutes)
-    if (now - this.lastCacheCleanup > 120000) {
+    // Periodic cache cleanup using defined interval
+    if (now - this.lastCacheCleanup > MEMORY_CONSTANTS.CACHE_CLEANUP_INTERVAL) {
       this.cleanupExpiredCache();
       this.lastCacheCleanup = now;
     }
@@ -1800,6 +2049,23 @@ class SmartTRAServer {
    * @param context - Additional context for debugging
    * @returns A categorized error with proper classification
    */
+  private logError(message: string, error?: unknown, context?: Record<string, any>): void {
+    // Use console.error for structured logging (not console.log which corrupts MCP protocol)
+    const logEntry = {
+      timestamp: new Date().toISOString(),
+      sessionId: this.sessionId,
+      message,
+      error: error instanceof Error ? {
+        name: error.name,
+        message: error.message,
+        stack: error.stack
+      } : error,
+      context
+    };
+    
+    console.error(JSON.stringify(logEntry, null, 2));
+  }
+
   private categorizeError(error: unknown, context?: Record<string, any>): TRAError {
     if (error instanceof TRAError) {
       return error; // Already categorized
@@ -1841,7 +2107,7 @@ class SmartTRAServer {
     }
     
     // Data not found errors
-    if (errorMessage.includes('404') || 
+    if (errorMessage.includes(HTTP_CONSTANTS.NOT_FOUND.toString()) || 
         errorMessage.includes('not found') ||
         errorMessage.includes('No data') ||
         errorMessage.includes('empty')) {
@@ -1869,10 +2135,24 @@ class SmartTRAServer {
     // Keep recent expired entries for fallback purposes
     const graceExpiry = now - (2 * 60 * 1000);
     
+    // First pass: remove expired entries
     for (const [stationId, cached] of this.liveDataCache.entries()) {
       if (cached.expiresAt < graceExpiry) {
         this.liveDataCache.delete(stationId);
       }
+    }
+    
+    // Second pass: enforce maximum cache size to prevent memory bloat
+    if (this.liveDataCache.size > MEMORY_CONSTANTS.MAX_CACHE_ENTRIES) {
+      // Convert to array, sort by expiry time, and keep only the most recent entries
+      const entries = Array.from(this.liveDataCache.entries())
+        .sort(([,a], [,b]) => b.expiresAt - a.expiresAt)
+        .slice(0, MEMORY_CONSTANTS.MAX_CACHE_ENTRIES);
+      
+      this.liveDataCache.clear();
+      entries.forEach(([stationId, cached]) => {
+        this.liveDataCache.set(stationId, cached);
+      });
     }
     
     const afterCount = this.liveDataCache.size;
