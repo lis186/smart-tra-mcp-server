@@ -1600,9 +1600,10 @@ class SmartTRAServer {
         
         if (primaryTrains.length > 0) {
           // Show appropriate time window message based on whether a specific time was given
+          const actualTimeWindow = parsed.preferences?.timeWindowHours || 2;
           const timeWindowMessage = parsed.time 
             ? `目標時間 ${parsed.time} 前後` 
-            : `接下來2小時`;
+            : `接下來${actualTimeWindow}小時`;
           responseText += `**月票可搭 (${timeWindowMessage}):**\n\n`;
           primaryTrains.forEach((train, index) => {
             const passIcon = train.isMonthlyPassEligible ? '🎫' : '💰';
@@ -1681,10 +1682,11 @@ class SmartTRAServer {
         responseText += `🎫 = 月票可搭 | 💰 = 需另購票 | ⚠️ = 即將發車 | 🚨 = 誤點 | ✅ = 準點\n`;
         
         // Show appropriate time window help text
+        const actualTimeWindow = parsed.preferences?.timeWindowHours || 2;
         if (parsed.time) {
-          responseText += `時間視窗: 目標時間前1小時到後2小時 | 可用 "接下來4小時" 擴展搜尋\n\n`;
+          responseText += `時間視窗: 目標時間前1小時到後${actualTimeWindow}小時 | 可用 "接下來4小時" 擴展搜尋\n\n`;
         } else {
-          responseText += `時間視窗: 接下來2小時 | 可用 "接下來4小時" 擴展搜尋\n\n`;
+          responseText += `時間視窗: 接下來${actualTimeWindow}小時 | 可用 "接下來4小時" 擴展搜尋\n\n`;
         }
         
         // Add fare summary if available

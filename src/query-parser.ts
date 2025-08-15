@@ -16,6 +16,7 @@ export interface ParsedQuery {
     cheapest?: boolean;
     directOnly?: boolean;
     trainType?: string;
+    timeWindowHours?: number;
   };
   confidence: number;
   rawQuery: string;
@@ -70,7 +71,8 @@ export class QueryParser {
     PREF_FASTEST: /(最快|快速|急行|特急|自強)/,
     PREF_CHEAPEST: /(最便宜|便宜|省錢|經濟)/,
     PREF_DIRECT: /(直達|不換車|不轉車)/,
-    PREF_TRAIN_TYPE: /(自強|莒光|復興|區間快|區間)/
+    PREF_TRAIN_TYPE: /(自強|莒光|復興|區間快|區間)/,
+    PREF_TIME_WINDOW: /(接下來|未來|之後)(\d+)(小時|個小時)/
   };
 
   /**
@@ -433,6 +435,16 @@ export class QueryParser {
         preferences.trainType = '區間';
       }
       hasPreferences = true;
+    }
+
+    // Extract time window (e.g., "接下來6小時", "未來4小時")
+    const timeWindowMatch = query.match(this.COMPILED_PATTERNS.PREF_TIME_WINDOW);
+    if (timeWindowMatch) {
+      const hours = parseInt(timeWindowMatch[2], 10);
+      if (hours > 0 && hours <= 24) { // Reasonable bounds
+        preferences.timeWindowHours = hours;
+        hasPreferences = true;
+      }
     }
 
     return { preferences, hasPreferences };
