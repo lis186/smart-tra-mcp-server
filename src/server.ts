@@ -6,8 +6,117 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import * as dotenv from 'dotenv';
 import { QueryParser, ParsedQuery } from './query-parser.js';
+import * as fs from 'fs';
+import * as path from 'path';
+
+// Type definitions for better type safety
+interface NodeSystemError extends Error {
+  code?: string;
+  errno?: number;
+  syscall?: string;
+  path?: string;
+}
+
+interface TransportError extends Error {
+  code?: string;
+  details?: unknown;
+}
+
+// Process exit codes
+const EXIT_CODES = {
+  SUCCESS: 0,
+  ERROR: 1,
+  UNCAUGHT_EXCEPTION: 1,
+} as const;
+
+// Timeout constants
+const TIMEOUTS = {
+  GRACEFUL_SHUTDOWN: 5000,      // 5 seconds for graceful shutdown
+  SHUTDOWN_WAIT: 1000,           // 1 second wait before shutdown
+  REQUEST_COMPLETE_WAIT: 100,    // 100ms wait for requests to complete
+} as const;
+
+// Retry configuration for API calls
+const RETRY_CONFIG = {
+  MAX_RETRIES: 3,
+  INITIAL_DELAY: 1000,           // 1 second initial delay
+  MAX_DELAY: 10000,              // 10 seconds max delay
+  BACKOFF_MULTIPLIER: 2,         // Double the delay each retry
+  RETRYABLE_STATUS_CODES: [429, 500, 502, 503, 504] as readonly number[], // Rate limit and server errors
+} as const;
+
+// Load environment variables before any other code
+// Using manual parsing instead of dotenv to avoid stdout pollution
+// The dotenv package outputs to stdout which corrupts MCP JSON-RPC protocol
+function loadEnvironmentVariables(): void {
+  if (process.env.NODE_ENV === 'production') {
+    return; // Skip loading .env in production
+  }
+
+  try {
+    const envPath = path.join(process.cwd(), '.env');
+    if (!fs.existsSync(envPath)) {
+      return; // No .env file, skip silently
+    }
+
+    const envContent = fs.readFileSync(envPath, 'utf-8');
+    const lines = envContent.split('\n');
+    
+    for (let i = 0; i < lines.length; i++) {
+      let line = lines[i].trim();
+      
+      // Skip empty lines and comments
+      if (!line || line.startsWith('#')) {
+        continue;
+      }
+      
+      // Handle KEY=VALUE format with support for quotes and multi-line values
+      const equalsIndex = line.indexOf('=');
+      if (equalsIndex === -1) {
+        continue; // Invalid format, skip
+      }
+      
+      const key = line.substring(0, equalsIndex).trim();
+      let value = line.substring(equalsIndex + 1).trim();
+      
+      // Handle quoted values (single or double quotes)
+      const isQuoted = (value.startsWith('"') && value.endsWith('"')) || 
+                       (value.startsWith("'") && value.endsWith("'"));
+      
+      if (isQuoted) {
+        // Remove surrounding quotes
+        value = value.slice(1, -1);
+        
+        // Handle multi-line values for quoted strings
+        while (!line.endsWith(value[0]) && i + 1 < lines.length) {
+          i++;
+          value += '\n' + lines[i];
+        }
+        
+        // Unescape escaped characters
+        value = value
+          .replace(/\\n/g, '\n')
+          .replace(/\\r/g, '\r')
+          .replace(/\\t/g, '\t')
+          .replace(/\\\\/g, '\\')
+          .replace(/\\"/g, '"')
+          .replace(/\\'/g, "'");
+      }
+      
+      // Only set if not already defined (allows overrides from actual env)
+      if (key && !process.env[key]) {
+        process.env[key] = value;
+      }
+    }
+  } catch (error) {
+    // Silently ignore .env loading errors to avoid stdout pollution
+    // Errors will be caught when trying to use the missing env vars
+  }
+}
+
+// Load environment variables at startup
+loadEnvironmentVariables();
 
 // Constants - TPASS Monthly Pass Restrictions
 // These train types are NOT eligible for TPASS monthly pass
@@ -91,10 +200,6 @@ const VALIDATION_BOUNDS = {
   TIME_WINDOW_MIN: 1,                // Minimum time window in hours
   TIME_WINDOW_MAX: 24                // Maximum time window in hours
 } as const;
-
-// Load environment variables - needed for TDX API credentials
-// Use silent dotenv config to prevent stdout pollution in MCP servers
-dotenv.config({ debug: false });
 
 // Utility function to check if running in test environment
 function isTestEnvironment(): boolean {
@@ -327,6 +432,7 @@ interface TrainSearchResult {
 class SmartTRAServer {
   private server: Server;
   private isShuttingDown = false;
+  private isConnected = false;
   private requestCount = new Map<string, number>();
   private lastRequestTime = new Map<string, number>();
   private readonly sessionId: string;
@@ -359,7 +465,7 @@ class SmartTRAServer {
   private readonly MAX_CONTEXT_LENGTH = API_CONFIG.MAX_CONTEXT_LENGTH;
   private readonly RATE_LIMIT_WINDOW = API_CONFIG.RATE_LIMIT_WINDOW;
   private readonly RATE_LIMIT_MAX_REQUESTS = API_CONFIG.MAX_REQUESTS_PER_WINDOW;
-  private readonly GRACEFUL_SHUTDOWN_TIMEOUT = 5000; // 5 seconds
+  private readonly GRACEFUL_SHUTDOWN_TIMEOUT = TIMEOUTS.GRACEFUL_SHUTDOWN;
   
   // Pre-compiled regex patterns for performance optimization
   private readonly REGEX_PATTERNS = {
@@ -563,6 +669,54 @@ class SmartTRAServer {
   }
 
   // TDX API Authentication with race condition protection
+  // Utility function for API calls with retry logic and exponential backoff
+  private async fetchWithRetry(
+    url: string, 
+    options: RequestInit, 
+    retryCount = 0
+  ): Promise<Response> {
+    try {
+      const response = await fetch(url, options);
+      
+      // Check if we should retry based on status code
+      if (RETRY_CONFIG.RETRYABLE_STATUS_CODES.includes(response.status) && 
+          retryCount < RETRY_CONFIG.MAX_RETRIES) {
+        const delay = Math.min(
+          RETRY_CONFIG.INITIAL_DELAY * Math.pow(RETRY_CONFIG.BACKOFF_MULTIPLIER, retryCount),
+          RETRY_CONFIG.MAX_DELAY
+        );
+        
+        console.error(
+          `API request failed with status ${response.status}, retrying in ${delay}ms... ` +
+          `(attempt ${retryCount + 1}/${RETRY_CONFIG.MAX_RETRIES})`
+        );
+        
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return this.fetchWithRetry(url, options, retryCount + 1);
+      }
+      
+      return response;
+    } catch (error) {
+      // Network errors or timeouts
+      if (retryCount < RETRY_CONFIG.MAX_RETRIES) {
+        const delay = Math.min(
+          RETRY_CONFIG.INITIAL_DELAY * Math.pow(RETRY_CONFIG.BACKOFF_MULTIPLIER, retryCount),
+          RETRY_CONFIG.MAX_DELAY
+        );
+        
+        console.error(
+          `API request failed with error: ${error}, retrying in ${delay}ms... ` +
+          `(attempt ${retryCount + 1}/${RETRY_CONFIG.MAX_RETRIES})`
+        );
+        
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return this.fetchWithRetry(url, options, retryCount + 1);
+      }
+      
+      throw error; // Re-throw after all retries exhausted
+    }
+  }
+
   private async getAccessToken(): Promise<string> {
     // Check cache first
     if (this.tokenCache && this.tokenCache.expiresAt > Date.now()) {
@@ -614,7 +768,7 @@ class SmartTRAServer {
       client_secret: clientSecret
     });
 
-    const response = await fetch(authUrl, {
+    const response = await this.fetchWithRetry(authUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded'
@@ -656,7 +810,7 @@ class SmartTRAServer {
       const baseUrl = process.env.TDX_BASE_URL || 'https://tdx.transportdata.tw/api/basic';
       
       // First, check available date range from v3 API
-      const dateRangeResponse = await fetch(`${baseUrl}/v3/Rail/TRA/DailyTrainTimetable/TrainDates?%24format=JSON`, {
+      const dateRangeResponse = await this.fetchWithRetry(`${baseUrl}/v3/Rail/TRA/DailyTrainTimetable/TrainDates?%24format=JSON`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Accept': 'application/json'
@@ -693,7 +847,7 @@ class SmartTRAServer {
       // Always use the date format - "Today" endpoint doesn't work for OD queries
       const endpoint = `/v3/Rail/TRA/DailyTrainTimetable/OD/${originStationId}/to/${destinationStationId}/${date}`;
       
-      const response = await fetch(`${baseUrl}${endpoint}?%24format=JSON`, {
+      const response = await this.fetchWithRetry(`${baseUrl}${endpoint}?%24format=JSON`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Accept': 'application/json'
@@ -850,7 +1004,7 @@ class SmartTRAServer {
       // Use the OD (Origin-Destination) fare endpoint
       const endpoint = `/v3/Rail/TRA/ODFare/${originStationId}/to/${destinationStationId}`;
       
-      const response = await fetch(`${baseUrl}${endpoint}?%24format=JSON`, {
+      const response = await this.fetchWithRetry(`${baseUrl}${endpoint}?%24format=JSON`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Accept': 'application/json'
@@ -983,7 +1137,7 @@ class SmartTRAServer {
       const baseUrl = process.env.TDX_BASE_URL || 'https://tdx.transportdata.tw/api/basic';
       
       console.error(`Fetching fresh live data for station ${stationId}`);
-      const response = await fetch(`${baseUrl}/v3/Rail/TRA/StationLiveBoard/Station/${stationId}?%24format=JSON&%24top=50`, {
+      const response = await this.fetchWithRetry(`${baseUrl}/v3/Rail/TRA/StationLiveBoard/Station/${stationId}?%24format=JSON&%24top=50`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Accept': 'application/json'
@@ -1390,6 +1544,12 @@ class SmartTRAServer {
   private async loadStationData(): Promise<void> {
     if (this.stationDataLoaded) return;
     
+    // Don't attempt to load if not connected to prevent EPIPE errors
+    if (!this.isConnected) {
+      this.stationLoadFailed = true;
+      return;
+    }
+    
     // Avoid repeated failed attempts (retry once per 5 minutes)
     const now = Date.now();
     if (this.stationLoadFailed && (now - this.lastStationLoadAttempt) < 300000) {
@@ -1399,11 +1559,17 @@ class SmartTRAServer {
     this.lastStationLoadAttempt = now;
 
     try {
+      // Check connection before any operations that might output
+      if (!this.isConnected) {
+        this.stationLoadFailed = true;
+        return;
+      }
+      
       console.error('Loading TRA station data from TDX API...');
       const token = await this.getAccessToken();
       const baseUrl = process.env.TDX_BASE_URL || 'https://tdx.transportdata.tw/api/basic';
       
-      const response = await fetch(`${baseUrl}/v2/Rail/TRA/Station?%24format=JSON`, {
+      const response = await this.fetchWithRetry(`${baseUrl}/v2/Rail/TRA/Station?%24format=JSON`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Accept': 'application/json'
@@ -1422,9 +1588,16 @@ class SmartTRAServer {
       this.buildSearchIndexes();
       this.stationDataLoaded = true;
       this.stationLoadFailed = false;
-      console.error(`Loaded ${this.stationData.length} TRA stations from TDX API`);
+      
+      // Only log success if still connected
+      if (this.isConnected) {
+        console.error(`Loaded ${this.stationData.length} TRA stations from TDX API`);
+      }
     } catch (error) {
-      console.error('Failed to load station data:', error);
+      // Only log errors if still connected
+      if (this.isConnected) {
+        console.error('Failed to load station data:', error);
+      }
       this.stationDataLoaded = false;
       this.stationLoadFailed = true;
     }
@@ -1558,9 +1731,38 @@ class SmartTRAServer {
     }
   }
 
+  // Input validation utility
+  private validateApiInput(input: unknown, fieldName: string, maxLength: number): string {
+    if (typeof input !== 'string') {
+      throw new Error(`${fieldName} must be a string`);
+    }
+    
+    const trimmed = input.trim();
+    if (!trimmed) {
+      throw new Error(`${fieldName} cannot be empty`);
+    }
+    
+    if (trimmed.length > maxLength) {
+      throw new Error(`${fieldName} exceeds maximum length of ${maxLength} characters`);
+    }
+    
+    // Basic XSS/injection prevention
+    const sanitized = trimmed
+      .replace(/[<>]/g, '') // Remove HTML brackets
+      .replace(/javascript:/gi, '') // Remove javascript: protocol
+      .replace(/on\w+=/gi, ''); // Remove event handlers
+    
+    return sanitized;
+  }
+
   // Handle search_station tool request
   private async handleSearchStation(query: string, context?: string): Promise<any> {
     try {
+      // Validate inputs
+      const validatedQuery = this.validateApiInput(query, 'query', this.MAX_QUERY_LENGTH);
+      const validatedContext = context ? 
+        this.validateApiInput(context, 'context', this.MAX_CONTEXT_LENGTH) : 
+        undefined;
       // Ensure station data is loaded
       if (!this.stationDataLoaded) {
         await this.loadStationData();
@@ -1759,6 +1961,11 @@ class SmartTRAServer {
   // Handle search_trains tool request with query parsing
   private async handleSearchTrains(query: string, context?: string): Promise<any> {
     try {
+      // Validate inputs
+      const validatedQuery = this.validateApiInput(query, 'query', this.MAX_QUERY_LENGTH);
+      const validatedContext = context ? 
+        this.validateApiInput(context, 'context', this.MAX_CONTEXT_LENGTH) : 
+        undefined;
       // Parse the natural language query
       const parsed = this.queryParser.parse(query);
       
@@ -2165,7 +2372,7 @@ class SmartTRAServer {
     console.error(JSON.stringify(logEntry, null, 2));
   }
 
-  private categorizeError(error: unknown, context?: Record<string, any>): TRAError {
+  private categorizeError(error: unknown, context?: Record<string, unknown>): TRAError {
     if (error instanceof TRAError) {
       return error; // Already categorized
     }
@@ -2270,20 +2477,20 @@ class SmartTRAServer {
         // Give ongoing requests time to complete with proper timeout
         const shutdownTimer = setTimeout(() => {
           console.error('Graceful shutdown timeout reached, forcing exit');
-          process.exit(1);
+          process.exit(EXIT_CODES.ERROR);
         }, this.GRACEFUL_SHUTDOWN_TIMEOUT);
         
         // Clear timeout if shutdown completes naturally
         try {
           // Wait a bit for current requests to finish
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          await new Promise(resolve => setTimeout(resolve, TIMEOUTS.SHUTDOWN_WAIT));
           clearTimeout(shutdownTimer);
           console.error('Graceful shutdown complete');
-          process.exit(0);
+          process.exit(EXIT_CODES.SUCCESS);
         } catch (error) {
           clearTimeout(shutdownTimer);
           console.error('Error during shutdown:', error);
-          process.exit(1);
+          process.exit(EXIT_CODES.ERROR);
         }
       };
 
@@ -2294,7 +2501,43 @@ class SmartTRAServer {
 
   async start() {
     const transport = new StdioServerTransport();
+    
+    // Handle EPIPE errors gracefully to prevent crashes when client disconnects
+    process.on('uncaughtException', (error: Error) => {
+      const systemError = error as NodeSystemError;
+      if (systemError.code === 'EPIPE') {
+        // Client disconnected - mark as disconnected and exit gracefully
+        this.isConnected = false;
+        process.exit(EXIT_CODES.SUCCESS);
+      } else {
+        // Log other uncaught exceptions and exit
+        // Never re-throw from uncaughtException handler as it causes undefined behavior
+        console.error('Uncaught exception:', error);
+        console.error('Stack trace:', error.stack);
+        process.exit(EXIT_CODES.UNCAUGHT_EXCEPTION);
+      }
+    });
+
+    // Handle transport errors gracefully
+    transport.onclose = () => {
+      this.isConnected = false;
+      process.exit(EXIT_CODES.SUCCESS);
+    };
+    
+    transport.onerror = (error: Error) => {
+      this.isConnected = false;
+      const transportError = error as TransportError;
+      if (transportError.code === 'EPIPE') {
+        // Client disconnected - exit gracefully
+        process.exit(EXIT_CODES.SUCCESS);
+      } else {
+        console.error('Transport error:', error);
+        console.error('Error details:', transportError.details);
+      }
+    };
+
     await this.server.connect(transport);
+    this.isConnected = true;
     console.error('Smart TRA MCP Server started successfully');
   }
 
@@ -2388,5 +2631,5 @@ export { SmartTRAServer };
 const server = new SmartTRAServer();
 server.start().catch((error) => {
   console.error('Failed to start server:', error);
-  process.exit(1);
+  process.exit(EXIT_CODES.ERROR);
 });
