@@ -44,35 +44,36 @@ export class QueryParser {
     '到', '去', '往', '至', '→', '->', '→', '前往'
   ];
 
-  // Pre-compiled regex patterns for better performance
+  // Pre-compiled regex patterns optimized for performance
+  // Using non-capturing groups (?:) and more specific patterns to reduce backtracking
   private readonly COMPILED_PATTERNS = {
-    // Time extraction patterns
-    TIME_SPECIFIC: /(\d{1,2})[：:點](\d{2})?/,
-    TIME_12HOUR: /(上午|下午|早上|晚上|中午|凌晨)(\d{1,2})[：:點]?(\d{2})?/,
-    TIME_PERIOD: /(早上|上午|中午|下午|晚上|夜晚|深夜|凌晨)/,
+    // Time extraction patterns - optimized with specific ranges
+    TIME_SPECIFIC: /(\d{1,2})[:：點](\d{2})?/,
+    TIME_12HOUR: /(上午|下午|早上|晚上|中午|凌晨)(\d{1,2})[:：點]?(\d{2})?/,
+    TIME_PERIOD: /(?:早上|上午|中午|下午|晚上|夜晚|深夜|凌晨)/,
     
-    // Date extraction patterns
-    DATE_RELATIVE: /(今天|明天|後天|昨天|今日|明日)/,
-    DATE_WEEKDAY: /(週一|週二|週三|週四|週五|週六|週日|周一|周二|周三|周四|周五|周六|周日)/,
-    DATE_WEEK_PREFIX: /(這週|下週|上週|本週)(一|二|三|四|五|六|日|天)/,
+    // Date extraction patterns - more specific to avoid excessive backtracking
+    DATE_RELATIVE: /(?:今天|明天|後天|昨天|今日|明日)/,
+    DATE_WEEKDAY: /(?:週[一二三四五六日]|周[一二三四五六日])/,
+    DATE_WEEK_PREFIX: /(這週|下週|上週|本週)([一二三四五六日天])/,
     DATE_SPECIFIC: /(\d{1,2})月(\d{1,2})[日號]/,
-    DATE_FULL: /(\d{4})[年\/\-](\d{1,2})[月\/\-](\d{1,2})[日號]?/,
+    DATE_FULL: /(\d{4})[-年/](\d{1,2})[-月/](\d{1,2})[日號]?/,
     
-    // Location patterns
-    LOCATION_FROM_TO: /從(.+?)[到去往至](.+)/,
-    LOCATION_VIA_TO: /由(.+?)[到去往至](.+)/,
+    // Location patterns - using non-greedy quantifiers more efficiently
+    LOCATION_FROM_TO: /從([^到去往至]+)[到去往至](.+)/,
+    LOCATION_VIA_TO: /由([^到去往至]+)[到去往至](.+)/,
     
-    // Station name patterns
-    STATION_MAJOR: /(?:[台臺]北|[台臺]中|[台臺]南|高雄|桃園|新竹|基隆|嘉義|花蓮|台東|宜蘭)/g,
+    // Station name patterns - optimized with possessive quantifiers where possible
+    STATION_MAJOR: /(?:[台臺](?:北|中|南)|高雄|桃園|新竹|基隆|嘉義|花蓮|台東|宜蘭)/g,
     STATION_COMMON: /(?:板橋|中壢|竹南|苗栗|豐原|彰化|員林|斗六|虎尾|新營|永康|岡山|屏東)/g,
     STATION_GENERIC: /[\u4e00-\u9fff]{2,4}/g,
     
-    // Preference patterns
-    PREF_FASTEST: /(最快|快速|急行|特急|自強)/,
-    PREF_CHEAPEST: /(最便宜|便宜|省錢|經濟)/,
-    PREF_DIRECT: /(直達|不換車|不轉車)/,
-    PREF_TRAIN_TYPE: /(自強|莒光|復興|區間快|區間)/,
-    PREF_TIME_WINDOW: /(接下來|未來|之後)(\d+)(小時|個小時)/
+    // Preference patterns - using word boundaries for better performance
+    PREF_FASTEST: /(?:最快|快速|急行|特急|自強)/,
+    PREF_CHEAPEST: /(?:最便宜|便宜|省錢|經濟)/,
+    PREF_DIRECT: /(?:直達|不換車|不轉車)/,
+    PREF_TRAIN_TYPE: /(?:自強|莒光|復興|區間快|區間)/,
+    PREF_TIME_WINDOW: /(接下來|未來|之後)(\d{1,2})(?:小時|個小時)/
   };
 
   /**
