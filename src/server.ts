@@ -7,15 +7,14 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { QueryParser, ParsedQuery } from './query-parser.js';
+import * as fs from 'fs';
+import * as path from 'path';
 
-// Load environment variables before any other imports
-// Using process.env directly instead of dotenv to avoid stdout pollution
-// The .env file will be loaded by the dotenv/config import in package.json or manually
+// Load environment variables before any other code
+// Using manual parsing instead of dotenv to avoid stdout pollution
+// The dotenv package outputs to stdout which corrupts MCP JSON-RPC protocol
 if (process.env.NODE_ENV !== 'production') {
   try {
-    // Use native fs to read .env file to avoid dotenv stdout pollution
-    const fs = await import('fs');
-    const path = await import('path');
     const envPath = path.join(process.cwd(), '.env');
     if (fs.existsSync(envPath)) {
       const envContent = fs.readFileSync(envPath, 'utf-8');
@@ -33,7 +32,8 @@ if (process.env.NODE_ENV !== 'production') {
       });
     }
   } catch (error) {
-    // Silently ignore .env loading errors
+    // Silently ignore .env loading errors to avoid stdout pollution
+    // Errors will be caught when trying to use the missing env vars
   }
 }
 
