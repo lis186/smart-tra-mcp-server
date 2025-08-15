@@ -9,10 +9,20 @@ import {
 import * as dotenv from 'dotenv';
 import { QueryParser, ParsedQuery } from './query-parser.js';
 
-// Constants
-const MONTHLY_PASS_TRAIN_TYPES = {
-  LOCAL: '10',      // 區間車
-  FAST_LOCAL: '11'  // 區間快車
+// Constants - TPASS Monthly Pass Restrictions
+// These train types are NOT eligible for TPASS monthly pass
+const TPASS_RESTRICTED_TRAIN_TYPES = {
+  TAROKO: '1',         // 太魯閣號 (Taroko Express)
+  PUYUMA: '2',         // 普悠瑪號 (Puyuma Express) 
+  EMU3000: '11'        // 新自強號 EMU3000 (New Tze-Chiang)
+} as const;
+
+// Common eligible train types for reference
+const TPASS_ELIGIBLE_EXAMPLES = {
+  LOCAL: '10',         // 區間車 (Local)
+  FAST_LOCAL: '12',    // 區間快車 (Fast Local) - Note: corrected from '11'
+  CHU_KUANG: '110',    // 莒光號 (Chu-Kuang)
+  TZE_CHIANG: '112'    // 自強號 (Tze-Chiang) - older models
 } as const;
 
 const API_CONFIG = {
@@ -582,9 +592,10 @@ class SmartTRAServer {
       const destinationSequence = destinationStop.StopSequence;
       const stops = Math.abs(destinationSequence - originSequence) - 1; // Exclude origin and destination
       
-      // Check if eligible for monthly pass (區間車, 區間快車)
-      const monthlyPassTrainTypes = [MONTHLY_PASS_TRAIN_TYPES.LOCAL, MONTHLY_PASS_TRAIN_TYPES.FAST_LOCAL] as const;
-      const isMonthlyPassEligible = monthlyPassTrainTypes.includes(train.TrainInfo.TrainTypeCode as typeof monthlyPassTrainTypes[number]);
+      // Check TPASS monthly pass eligibility using restriction-based approach
+      // All trains are eligible EXCEPT those explicitly restricted
+      const restrictedTrainTypes: string[] = Object.values(TPASS_RESTRICTED_TRAIN_TYPES);
+      const isMonthlyPassEligible = !restrictedTrainTypes.includes(train.TrainInfo.TrainTypeCode);
       
       results.push({
         trainNo: train.TrainInfo.TrainNo,
