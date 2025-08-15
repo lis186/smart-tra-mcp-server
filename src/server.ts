@@ -38,6 +38,15 @@ const API_CONFIG = {
   MAX_CONTEXT_LENGTH: 200
 } as const;
 
+// Time and data quality constants
+const TIME_CONSTANTS = {
+  DEFAULT_TIME_WINDOW_HOURS: 2,
+  MAX_REASONABLE_TRAVEL_HOURS: 6,     // Filter out abnormal travel times
+  TIME_LOOKBACK_HOURS: 1,             // Show trains 1 hour before target time
+  MILLISECONDS_PER_HOUR: 60 * 60 * 1000,
+  HOURS_IN_DAY: 24
+} as const;
+
 // Load environment variables - needed for TDX API credentials
 // Redirect console output temporarily to prevent stdout pollution
 const originalConsoleLog = console.log;
@@ -103,6 +112,13 @@ interface CategorizedError {
   message: string;
   originalError?: Error;
   context?: Record<string, any>;
+}
+
+interface MCPToolResponse {
+  content: Array<{
+    type: 'text';
+    text: string;
+  }>;
 }
 
 class TRAError extends Error {
@@ -688,8 +704,12 @@ class SmartTRAServer {
       // Taipei to Taichung should never take more than 5 hours
       // This filters out bad data from TDX API
       const travelTimeHours = this.getTravelTimeInHours(departureTime, arrivalTime);
-      if (travelTimeHours > 6) {
-        console.error(`Skipping train ${train.TrainInfo.TrainNo} due to abnormal travel time: ${travelTimeHours} hours`);
+      if (travelTimeHours > TIME_CONSTANTS.MAX_REASONABLE_TRAVEL_HOURS) {
+        this.logError(`Skipping train due to abnormal travel time`, undefined, {
+          trainNo: train.TrainInfo.TrainNo,
+          travelTimeHours,
+          threshold: TIME_CONSTANTS.MAX_REASONABLE_TRAVEL_HOURS
+        });
         continue;
       }
       
@@ -797,7 +817,11 @@ class SmartTRAServer {
       console.error(`Retrieved fare data for ${originStationId} → ${destinationStationId}`);
       return fareInfo;
     } catch (error) {
-      console.error(`Failed to get fare data for ${originStationId} → ${destinationStationId}:`, error instanceof Error ? error.message : String(error));
+      this.logError('Failed to get fare data', error, { 
+        originStationId, 
+        destinationStationId,
+        operation: 'getODFare'
+      });
       return null; // Graceful fallback
     }
   }
@@ -969,7 +993,15 @@ class SmartTRAServer {
   // Filter trains based on commuter preferences
   private filterCommuterTrains(
     trains: TrainSearchResult[], 
-    preferences?: any,
+    preferences?: {
+      fastest?: boolean;
+      cheapest?: boolean;
+      directOnly?: boolean;
+      trainType?: string;
+      timeWindowHours?: number;
+      includeAllTrainTypes?: boolean;
+      maxResults?: number;
+    },
     targetDate?: string,
     targetTime?: string
   ): TrainSearchResult[] {
@@ -1003,11 +1035,11 @@ class SmartTRAServer {
     }
     
     // Apply time window filtering
-    const timeWindowHours = preferences?.timeWindowHours || 2;
+    const timeWindowHours = preferences?.timeWindowHours || TIME_CONSTANTS.DEFAULT_TIME_WINDOW_HOURS;
     // For user-specified times, show trains within window around that time
     // Include trains from 1 hour before to timeWindowHours after
-    const minTime = new Date(baseTime.getTime() - 60 * 60 * 1000); // 1 hour before
-    const maxTime = new Date(baseTime.getTime() + timeWindowHours * 60 * 60 * 1000);
+    const minTime = new Date(baseTime.getTime() - TIME_CONSTANTS.TIME_LOOKBACK_HOURS * TIME_CONSTANTS.MILLISECONDS_PER_HOUR);
+    const maxTime = new Date(baseTime.getTime() + timeWindowHours * TIME_CONSTANTS.MILLISECONDS_PER_HOUR);
     
     // Create reference date for parsing train times
     const referenceDate = targetDate ? new Date(targetDate + 'T00:00:00') : new Date();
@@ -1114,9 +1146,12 @@ class SmartTRAServer {
     // 3. We're dealing with today's schedule (not future dates)
     if (!referenceDate && trainTime < now) {
       const hoursDiff = now.getHours() - hours;
-      // If the time difference is significant (>20 hours), likely it's an early morning train tomorrow
+      const EARLY_MORNING_THRESHOLD = 20; // Hours - if difference >20, it's likely early morning train tomorrow
+      const RECENT_DEPARTURE_THRESHOLD = 4; // Hours - if <4 hours in past, might be recent departure
+      
+      // If the time difference is significant, likely it's an early morning train tomorrow
       // Otherwise, it might be a train that just departed
-      if (hoursDiff > 20 || (hoursDiff < 0 && Math.abs(hoursDiff) < 4)) {
+      if (hoursDiff > EARLY_MORNING_THRESHOLD || (hoursDiff < 0 && Math.abs(hoursDiff) < RECENT_DEPARTURE_THRESHOLD)) {
         trainTime.setDate(trainTime.getDate() + 1);
       }
     }
@@ -1434,7 +1469,7 @@ class SmartTRAServer {
       };
 
     } catch (error) {
-      console.error('Error in handleSearchStation:', error);
+      this.logError('Error in handleSearchStation', error, { query, context });
       return {
         content: [{
           type: 'text',
@@ -1737,7 +1772,7 @@ class SmartTRAServer {
       };
 
     } catch (error) {
-      console.error('Error in handleSearchTrains:', error);
+      this.logError('Error in handleSearchTrains', error, { query, context });
       return {
         content: [{
           type: 'text',
@@ -1842,6 +1877,23 @@ class SmartTRAServer {
    * @param context - Additional context for debugging
    * @returns A categorized error with proper classification
    */
+  private logError(message: string, error?: unknown, context?: Record<string, any>): void {
+    // Use console.error for structured logging (not console.log which corrupts MCP protocol)
+    const logEntry = {
+      timestamp: new Date().toISOString(),
+      sessionId: this.sessionId,
+      message,
+      error: error instanceof Error ? {
+        name: error.name,
+        message: error.message,
+        stack: error.stack
+      } : error,
+      context
+    };
+    
+    console.error(JSON.stringify(logEntry, null, 2));
+  }
+
   private categorizeError(error: unknown, context?: Record<string, any>): TRAError {
     if (error instanceof TRAError) {
       return error; // Already categorized
