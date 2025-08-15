@@ -65,6 +65,15 @@ const MEMORY_CONSTANTS = {
   MAX_STATION_SEARCH_RESULTS: 10     // Limit station search results
 } as const;
 
+// Response optimization constants (Stage 8: Context Window Optimization)
+const RESPONSE_CONSTANTS = {
+  MAX_RESPONSE_TOKENS: 2000,         // Target maximum tokens per response
+  MAX_TRAINS_IN_JSON: 10,            // Reduce JSON train count for context efficiency
+  MAX_TRAINS_FOR_SIMPLE_QUERY: 5,   // Even fewer for "find fastest" type queries
+  COMPACT_JSON: true,                // Use compact JSON formatting (no pretty-print)
+  INCLUDE_FULL_JSON: false           // Whether to include comprehensive JSON by default
+} as const;
+
 // Validation constants for input bounds
 const VALIDATION_BOUNDS = {
   YEAR_MIN: 2020,                    // Minimum valid year for train dates
@@ -1650,6 +1659,76 @@ class SmartTRAServer {
     }
   }
 
+  // Determine optimal number of trains to include based on query intent (Stage 8 optimization)
+  private getOptimalTrainCount(query: string, totalResults: number): number {
+    const lowerQuery = query.toLowerCase();
+    
+    // If user explicitly requests all trains, show more (but still limit for context)
+    if (lowerQuery.includes('所有班次') || lowerQuery.includes('全部') || 
+        lowerQuery.includes('all trains') || lowerQuery.includes('完整')) {
+      return Math.min(MEMORY_CONSTANTS.MAX_TRAINS_PER_RESULT, totalResults);
+    }
+    
+    // For "fastest", "quickest", "first" queries - show fewer options
+    if (lowerQuery.includes('最快') || lowerQuery.includes('fastest') || 
+        lowerQuery.includes('第一') || lowerQuery.includes('first') ||
+        lowerQuery.includes('最早') || lowerQuery.includes('quickest')) {
+      return Math.min(RESPONSE_CONSTANTS.MAX_TRAINS_FOR_SIMPLE_QUERY, totalResults);
+    }
+    
+    // For general queries, use standard limit but cap at reasonable number
+    return Math.min(RESPONSE_CONSTANTS.MAX_TRAINS_IN_JSON, totalResults);
+  }
+
+  // Check if user wants comprehensive JSON data (Stage 8 optimization)
+  private shouldIncludeFullJSON(query: string, context?: string): boolean {
+    const lowerQuery = query.toLowerCase();
+    const lowerContext = (context || '').toLowerCase();
+    
+    return lowerQuery.includes('json') || lowerQuery.includes('structured') || 
+           lowerQuery.includes('machine') || lowerQuery.includes('data') ||
+           lowerContext.includes('json') || lowerContext.includes('structured') ||
+           RESPONSE_CONSTANTS.INCLUDE_FULL_JSON;
+  }
+
+  // Create optimized structured data with minimal properties (Stage 8 optimization)
+  private createOptimizedStructuredData(
+    originStation: any, 
+    destinationStation: any, 
+    parsed: any, 
+    timetableData: any[], 
+    filteredResults: any[], 
+    query: string
+  ): string {
+    const trainCount = this.getOptimalTrainCount(query, filteredResults.length);
+    const trainsToInclude = filteredResults.slice(0, trainCount);
+    
+    const compactData = {
+      route: {
+        origin: { id: originStation.stationId, name: originStation.name },
+        destination: { id: destinationStation.stationId, name: destinationStation.name }
+      },
+      date: parsed.date || new Date().toISOString().split('T')[0],
+      totalTrains: timetableData.length,
+      filteredTrains: filteredResults.length,
+      shownTrains: trainCount,
+      trains: trainsToInclude.map(train => ({
+        trainNo: train.trainNo,
+        trainType: train.trainType,
+        departure: train.departureTime,
+        arrival: train.arrivalTime,
+        travelTime: train.travelTime,
+        monthlyPassEligible: train.isMonthlyPassEligible
+        // Removed: stops, fareInfo, delayMinutes, etc. for context efficiency
+      }))
+    };
+    
+    // Use compact formatting to save space
+    return RESPONSE_CONSTANTS.COMPACT_JSON ? 
+      JSON.stringify(compactData) : 
+      JSON.stringify(compactData, null, 2);
+  }
+
   // Handle search_trains tool request with query parsing
   private async handleSearchTrains(query: string, context?: string): Promise<any> {
     try {
@@ -1810,8 +1889,13 @@ class SmartTRAServer {
           const timeWindowMessage = parsed.time 
             ? `目標時間 ${parsed.time} 前後` 
             : `接下來${actualTimeWindow}小時`;
+          
+          // Apply Stage 8 optimization: limit displayed trains
+          const maxDisplayTrains = this.getOptimalTrainCount(query, primaryTrains.length);
+          const trainsToShow = primaryTrains.slice(0, maxDisplayTrains);
+          
           responseText += `**月票可搭 (${timeWindowMessage}):**\n\n`;
-          primaryTrains.forEach((train, index) => {
+          trainsToShow.forEach((train, index) => {
             const passIcon = train.isMonthlyPassEligible ? '🎫' : '💰';
             
             // Format delay/status information
@@ -1846,6 +1930,11 @@ class SmartTRAServer {
             }
             responseText += '\n';
           });
+          
+          // Add message if more trains are available (Stage 8 optimization)
+          if (primaryTrains.length > maxDisplayTrains) {
+            responseText += `⬇️ **${primaryTrains.length - maxDisplayTrains} more trains available** (use "列出所有班次" for complete list)\n\n`;
+          }
         }
         
         if (backupTrains.length > 0) {
@@ -1902,38 +1991,21 @@ class SmartTRAServer {
         }
       }
 
-      // Add machine-readable data
-      const structuredData = JSON.stringify({
-        route: {
-          origin: { id: originStation.stationId, name: originStation.name },
-          destination: { id: destinationStation.stationId, name: destinationStation.name }
-        },
-        date: parsed.date || new Date().toISOString().split('T')[0],
-        totalTrains: timetableData.length,
-        filteredTrains: filteredResults.length,
-        trains: filteredResults.map(train => ({
-          trainNo: train.trainNo,
-          trainType: train.trainType,
-          departure: train.departureTime,
-          arrival: train.arrivalTime,
-          travelTime: train.travelTime,
-          monthlyPassEligible: train.isMonthlyPassEligible,
-          stops: train.stops,
-          minutesUntilDeparture: train.minutesUntilDeparture,
-          isLate: train.isLate,
-          hasLeft: train.hasLeft,
-          lateWarning: train.lateWarning,
-          isBackupOption: train.isBackupOption,
-          fareInfo: train.fareInfo,
-          // Real-time delay information
-          delayMinutes: train.delayMinutes,
-          actualDeparture: train.actualDepartureTime,
-          actualArrival: train.actualArrivalTime,
-          trainStatus: train.trainStatus
-        }))
-      }, null, 2);
-
-      responseText += `**Machine-readable data:**\n\`\`\`json\n${structuredData}\n\`\`\``;
+      // Add optimized machine-readable data (Stage 8: Context Window Optimization)
+      if (this.shouldIncludeFullJSON(query, context)) {
+        const structuredData = this.createOptimizedStructuredData(
+          originStation, destinationStation, parsed, timetableData, filteredResults, query
+        );
+        responseText += `**Machine-readable data:**\n\`\`\`json\n${structuredData}\n\`\`\``;
+      } else {
+        // For context efficiency, provide minimal summary instead of full JSON
+        const trainCount = this.getOptimalTrainCount(query, filteredResults.length);
+        responseText += `**Summary:** Found ${filteredResults.length} trains, showing top ${Math.min(trainCount, filteredResults.length)} options`;
+        if (filteredResults.length > trainCount) {
+          responseText += ` (${filteredResults.length - trainCount} more available)`;
+        }
+        responseText += `\n💡 Add "with JSON data" to your query for structured output`;
+      }
 
       return {
         content: [{
