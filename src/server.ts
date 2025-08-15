@@ -18,6 +18,7 @@ const MONTHLY_PASS_TRAIN_TYPES = {
 const API_CONFIG = {
   TOKEN_CACHE_DURATION: 24 * 60 * 60 * 1000, // 24 hours in milliseconds  
   TOKEN_SAFETY_BUFFER: 5 * 60 * 1000,       // 5 minutes in milliseconds
+  LIVE_DATA_CACHE_DURATION: 45 * 1000,      // 45 seconds in milliseconds
   RATE_LIMIT_WINDOW: 60 * 1000,             // 1 minute in milliseconds
   MAX_REQUESTS_PER_WINDOW: 50,
   MAX_QUERY_LENGTH: 500,
@@ -65,6 +66,46 @@ interface TokenResponse {
 interface CachedToken {
   token: string;
   expiresAt: number;
+}
+
+interface CachedLiveData {
+  data: Map<string, TDXLiveBoardEntry>;
+  fetchedAt: number;
+  expiresAt: number;
+}
+
+// Error categorization for better handling and monitoring
+enum ErrorCategory {
+  NETWORK = 'network',
+  AUTHENTICATION = 'authentication', 
+  RATE_LIMIT = 'rate_limit',
+  VALIDATION = 'validation',
+  DATA_NOT_FOUND = 'data_not_found',
+  API_ERROR = 'api_error',
+  SYSTEM = 'system'
+}
+
+interface CategorizedError {
+  category: ErrorCategory;
+  message: string;
+  originalError?: Error;
+  context?: Record<string, any>;
+}
+
+class TRAError extends Error {
+  public readonly category: ErrorCategory;
+  public readonly context?: Record<string, any>;
+  
+  constructor(category: ErrorCategory, message: string, context?: Record<string, any>, originalError?: Error) {
+    super(message);
+    this.name = 'TRAError';
+    this.category = category;
+    this.context = context;
+    
+    if (originalError && originalError.stack) {
+      this.stack = originalError.stack;
+    }
+  }
 }
 
 interface TRAStation {
@@ -230,6 +271,9 @@ class SmartTRAServer {
   private stationLoadFailed = false;
   private lastStationLoadAttempt = 0;
   
+  // Live data caching - reduces API calls to TDX
+  private liveDataCache = new Map<string, CachedLiveData>();
+  
   // Query parsing
   private queryParser: QueryParser;
   
@@ -238,8 +282,9 @@ class SmartTRAServer {
   private stationEnNameIndex = new Map<string, TRAStation[]>();
   private stationPrefixIndex = new Map<string, TRAStation[]>();
   
-  // Rate limiting cleanup
+  // Rate limiting and cache cleanup
   private lastRateLimitCleanup = Date.now();
+  private lastCacheCleanup = Date.now();
   
   // Security limits
   private readonly MAX_QUERY_LENGTH = API_CONFIG.MAX_QUERY_LENGTH;
@@ -370,22 +415,40 @@ class SmartTRAServer {
 
       const query = args.query;
       if (!query || typeof query !== 'string' || query.trim().length === 0) {
-        throw new Error('Invalid query: must be a non-empty string');
+        throw new TRAError(ErrorCategory.VALIDATION, 'Invalid query: must be a non-empty string', { 
+          providedType: typeof query,
+          providedValue: query 
+        });
       }
       
       // Security: Check input length limits
       if (query.length > this.MAX_QUERY_LENGTH) {
-        throw new Error(`Query too long: maximum ${this.MAX_QUERY_LENGTH} characters allowed`);
+        throw new TRAError(ErrorCategory.VALIDATION, 
+          `Query too long: maximum ${this.MAX_QUERY_LENGTH} characters allowed`,
+          { 
+            queryLength: query.length,
+            maxLength: this.MAX_QUERY_LENGTH 
+          }
+        );
       }
 
       // Validate context parameter if provided
       const context = args.context;
       if (context !== undefined && typeof context !== 'string') {
-        throw new Error('Invalid context: must be a string if provided');
+        throw new TRAError(ErrorCategory.VALIDATION, 'Invalid context: must be a string if provided', {
+          providedType: typeof context,
+          providedValue: context
+        });
       }
       
       if (context && context.length > this.MAX_CONTEXT_LENGTH) {
-        throw new Error(`Context too long: maximum ${this.MAX_CONTEXT_LENGTH} characters allowed`);
+        throw new TRAError(ErrorCategory.VALIDATION,
+          `Context too long: maximum ${this.MAX_CONTEXT_LENGTH} characters allowed`,
+          {
+            contextLength: context.length,
+            maxLength: this.MAX_CONTEXT_LENGTH
+          }
+        );
       }
       
       // Rate limiting with session-based identification
@@ -457,14 +520,16 @@ class SmartTRAServer {
       if (!clientId) missingVars.push('TDX_CLIENT_ID');
       if (!clientSecret) missingVars.push('TDX_CLIENT_SECRET');
       
-      throw new Error(
+      throw new TRAError(
+        ErrorCategory.AUTHENTICATION,
         `TDX credentials not configured. Missing: ${missingVars.join(', ')}\n\n` +
         `Please:\n` +
         `1. Create a .env file in the project root\n` +
         `2. Add your TDX API credentials:\n` +
         `   TDX_CLIENT_ID=your_client_id\n` +
         `   TDX_CLIENT_SECRET=your_client_secret\n\n` +
-        `Get credentials from: https://tdx.transportdata.tw/`
+        `Get credentials from: https://tdx.transportdata.tw/`,
+        { missingVars }
       );
     }
 
@@ -484,7 +549,16 @@ class SmartTRAServer {
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`TDX authentication failed: ${response.status} ${response.statusText} - ${errorText}`);
+      throw new TRAError(
+        ErrorCategory.AUTHENTICATION,
+        `TDX authentication failed: ${response.status} ${response.statusText} - ${errorText}`,
+        { 
+          status: response.status, 
+          statusText: response.statusText, 
+          authUrl,
+          errorDetails: errorText 
+        }
+      );
     }
 
     const tokenData = await response.json() as TokenResponse;
@@ -760,14 +834,29 @@ class SmartTRAServer {
     return fareInfo;
   }
 
-  // Get live delay data from TDX Station Live Board API
+  /**
+   * Get live delay data from TDX Station Live Board API with caching
+   * Cache duration: 45 seconds to balance real-time accuracy with API rate limits
+   * @param stationId - TRA station ID
+   * @returns Map of train numbers to live board entries
+   */
   private async tryGetLiveDelayData(stationId: string): Promise<Map<string, TDXLiveBoardEntry>> {
+    const now = Date.now();
+    
+    // Check cache first - return cached data if still valid
+    const cached = this.liveDataCache.get(stationId);
+    if (cached && now < cached.expiresAt) {
+      console.error(`Using cached live data for station ${stationId} (${cached.data.size} trains)`);
+      return new Map(cached.data); // Return a copy to prevent external modifications
+    }
+    
     const liveDataMap = new Map<string, TDXLiveBoardEntry>();
     
     try {
       const token = await this.getAccessToken();
       const baseUrl = process.env.TDX_BASE_URL || 'https://tdx.transportdata.tw/api/basic';
       
+      console.error(`Fetching fresh live data for station ${stationId}`);
       const response = await fetch(`${baseUrl}/v3/Rail/TRA/StationLiveBoard/Station/${stationId}?%24format=JSON&%24top=50`, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -776,7 +865,17 @@ class SmartTRAServer {
       });
 
       if (!response.ok) {
-        console.error(`Live data not available for station ${stationId} (${response.status})`);
+        const categorizedError = this.categorizeError(
+          `API returned ${response.status}: ${response.statusText}`,
+          { stationId, endpoint: 'StationLiveBoard', status: response.status }
+        );
+        console.error(`Live data error for station ${stationId}: [${categorizedError.category}] ${categorizedError.message}`);
+        
+        // Return cached data if API fails, even if expired
+        if (cached) {
+          console.error(`Falling back to expired cache for station ${stationId} due to ${categorizedError.category} error`);
+          return new Map(cached.data);
+        }
         return liveDataMap;
       }
 
@@ -784,6 +883,12 @@ class SmartTRAServer {
       
       if (!Array.isArray(liveData) || liveData.length === 0) {
         console.error(`No live trains found for station ${stationId} - trains may not be running`);
+        // Cache empty result to avoid repeated API calls
+        this.liveDataCache.set(stationId, {
+          data: liveDataMap,
+          fetchedAt: now,
+          expiresAt: now + API_CONFIG.LIVE_DATA_CACHE_DURATION
+        });
         return liveDataMap;
       }
       
@@ -792,10 +897,30 @@ class SmartTRAServer {
         liveDataMap.set(entry.TrainNo, entry);
       }
       
-      console.error(`Found ${liveData.length} live trains for station ${stationId}`);
+      // Cache the successful result
+      this.liveDataCache.set(stationId, {
+        data: new Map(liveDataMap), // Store a copy to prevent external modifications
+        fetchedAt: now,
+        expiresAt: now + API_CONFIG.LIVE_DATA_CACHE_DURATION
+      });
+      
+      console.error(`Fetched and cached ${liveData.length} live trains for station ${stationId}`);
       return liveDataMap;
     } catch (error) {
-      console.error(`Failed to get live data for station ${stationId}:`, error instanceof Error ? error.message : String(error));
+      const categorizedError = this.categorizeError(error, { 
+        stationId, 
+        endpoint: 'StationLiveBoard',
+        operation: 'tryGetLiveDelayData'
+      });
+      console.error(`Failed to get live data for station ${stationId}: [${categorizedError.category}] ${categorizedError.message}`);
+      
+      // Return cached data if available, even if expired, for network/temporary errors
+      if (cached && (categorizedError.category === ErrorCategory.NETWORK || 
+                    categorizedError.category === ErrorCategory.API_ERROR)) {
+        console.error(`${categorizedError.category} error - falling back to cached data for station ${stationId}`);
+        return new Map(cached.data);
+      }
+      
       return liveDataMap; // Graceful fallback - return empty map
     }
   }
@@ -959,36 +1084,55 @@ class SmartTRAServer {
   }
 
   /**
-   * Add minutes to a time string
-   * @param timeString - Time in HH:MM or HH:MM:SS format
-   * @param minutes - Minutes to add (can be negative)
-   * @returns Updated time string in same format
+   * Add minutes to a time string with proper day boundary handling
+   * This method is critical for calculating actual train times when delays occur,
+   * especially for trains that cross midnight or have significant delays.
+   * 
+   * @param timeString - Time in HH:MM or HH:MM:SS format (e.g., "23:45", "14:30:25")
+   * @param minutes - Minutes to add (can be negative for early arrivals)
+   * @returns Updated time string in same format, properly wrapped around 24-hour boundaries
+   * 
+   * @example
+   * addMinutesToTime("23:45", 30) returns "00:15" (crosses midnight)
+   * addMinutesToTime("00:15", -30) returns "23:45" (goes to previous day)
+   * addMinutesToTime("14:30", 90) returns "16:00" (normal case)
    */
   private addMinutesToTime(timeString: string, minutes: number): string {
+    // Parse the time components - supports both HH:MM and HH:MM:SS formats
     const parts = timeString.split(':');
     const hours = parseInt(parts[0], 10);
     const mins = parseInt(parts[1], 10);
     const secs = parts[2] ? parseInt(parts[2], 10) : 0;
     
-    // Convert to total minutes
+    // Convert everything to total minutes since midnight for easier calculation
+    // This approach simplifies the math and handles edge cases more reliably
     let totalMinutes = hours * 60 + mins + minutes;
     
-    // Handle day overflow/underflow
+    // Handle day boundary crossings with wraparound logic
+    // Taiwan railway operates within a 24-hour schedule, so we need to wrap properly
+    
+    // Case 1: Negative time (before midnight of previous day)
+    // e.g., 00:15 - 30 minutes = -15 minutes = 23:45 of previous day
     while (totalMinutes < 0) {
-      totalMinutes += 24 * 60;
-    }
-    while (totalMinutes >= 24 * 60) {
-      totalMinutes -= 24 * 60;
+      totalMinutes += 24 * 60; // Add 24 hours worth of minutes (1440)
     }
     
-    // Convert back to hours and minutes
+    // Case 2: Time beyond 24 hours (past midnight of next day)  
+    // e.g., 23:45 + 30 minutes = 1455 minutes = 00:15 of next day
+    while (totalMinutes >= 24 * 60) {
+      totalMinutes -= 24 * 60; // Subtract 24 hours worth of minutes (1440)
+    }
+    
+    // Convert back to hours and minutes within valid 24-hour range (0-23:59)
     const newHours = Math.floor(totalMinutes / 60);
     const newMins = totalMinutes % 60;
     
-    // Format the result
+    // Format with zero-padding to maintain HH:MM format consistency
+    // This ensures output like "09:05" instead of "9:5"
     const hourStr = newHours.toString().padStart(2, '0');
     const minStr = newMins.toString().padStart(2, '0');
     
+    // Preserve original format: return with seconds if input had seconds
     if (parts[2]) {
       const secStr = secs.toString().padStart(2, '0');
       return `${hourStr}:${minStr}:${secStr}`;
@@ -1582,6 +1726,12 @@ class SmartTRAServer {
       this.lastRateLimitCleanup = now;
     }
     
+    // Periodic cache cleanup (every 2 minutes)
+    if (now - this.lastCacheCleanup > 120000) {
+      this.cleanupExpiredCache();
+      this.lastCacheCleanup = now;
+    }
+    
     // Clean old entries for current window
     for (const [id, time] of this.lastRequestTime.entries()) {
       if (time < windowStart) {
@@ -1593,7 +1743,16 @@ class SmartTRAServer {
     // Check current client
     const currentCount = this.requestCount.get(clientId) || 0;
     if (currentCount >= this.RATE_LIMIT_MAX_REQUESTS) {
-      throw new Error(`Rate limit exceeded: maximum ${this.RATE_LIMIT_MAX_REQUESTS} requests per minute`);
+      throw new TRAError(
+        ErrorCategory.RATE_LIMIT,
+        `Rate limit exceeded: maximum ${this.RATE_LIMIT_MAX_REQUESTS} requests per minute`,
+        {
+          clientId,
+          currentCount,
+          maxRequests: this.RATE_LIMIT_MAX_REQUESTS,
+          windowMs: this.RATE_LIMIT_WINDOW
+        }
+      );
     }
     
     // Update counters
@@ -1621,6 +1780,93 @@ class SmartTRAServer {
     const afterCount = this.requestCount.size;
     if (beforeCount !== afterCount) {
       console.error(`Rate limit cleanup: removed ${beforeCount - afterCount} inactive clients`);
+    }
+  }
+
+  /**
+   * Categorize and log errors for better monitoring and debugging
+   * @param error - The original error or error message
+   * @param context - Additional context for debugging
+   * @returns A categorized error with proper classification
+   */
+  private categorizeError(error: unknown, context?: Record<string, any>): TRAError {
+    if (error instanceof TRAError) {
+      return error; // Already categorized
+    }
+    
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const originalError = error instanceof Error ? error : undefined;
+    
+    // Network-related errors
+    if (errorMessage.includes('fetch') || 
+        errorMessage.includes('network') || 
+        errorMessage.includes('timeout') ||
+        errorMessage.includes('ECONNREFUSED') ||
+        errorMessage.includes('ENOTFOUND')) {
+      return new TRAError(ErrorCategory.NETWORK, `Network error: ${errorMessage}`, context, originalError);
+    }
+    
+    // Authentication errors
+    if (errorMessage.includes('401') || 
+        errorMessage.includes('403') || 
+        errorMessage.includes('authentication') ||
+        errorMessage.includes('unauthorized')) {
+      return new TRAError(ErrorCategory.AUTHENTICATION, `Authentication failed: ${errorMessage}`, context, originalError);
+    }
+    
+    // Rate limiting errors
+    if (errorMessage.includes('429') || 
+        errorMessage.includes('rate limit') ||
+        errorMessage.includes('too many requests')) {
+      return new TRAError(ErrorCategory.RATE_LIMIT, `Rate limit exceeded: ${errorMessage}`, context, originalError);
+    }
+    
+    // Validation errors
+    if (errorMessage.includes('Invalid') || 
+        errorMessage.includes('must be') ||
+        errorMessage.includes('too long') ||
+        errorMessage.includes('required')) {
+      return new TRAError(ErrorCategory.VALIDATION, `Validation error: ${errorMessage}`, context, originalError);
+    }
+    
+    // Data not found errors
+    if (errorMessage.includes('404') || 
+        errorMessage.includes('not found') ||
+        errorMessage.includes('No data') ||
+        errorMessage.includes('empty')) {
+      return new TRAError(ErrorCategory.DATA_NOT_FOUND, `Data not found: ${errorMessage}`, context, originalError);
+    }
+    
+    // API errors (4xx, 5xx status codes)
+    if (/[45]\d{2}/.test(errorMessage)) {
+      return new TRAError(ErrorCategory.API_ERROR, `API error: ${errorMessage}`, context, originalError);
+    }
+    
+    // Default to system error
+    return new TRAError(ErrorCategory.SYSTEM, `System error: ${errorMessage}`, context, originalError);
+  }
+
+  /**
+   * Clean up expired live data cache entries to prevent memory leaks
+   * Removes cache entries that have expired beyond a grace period
+   */
+  private cleanupExpiredCache(): void {
+    const now = Date.now();
+    const beforeCount = this.liveDataCache.size;
+    
+    // Remove cache entries that expired more than 2 minutes ago
+    // Keep recent expired entries for fallback purposes
+    const graceExpiry = now - (2 * 60 * 1000);
+    
+    for (const [stationId, cached] of this.liveDataCache.entries()) {
+      if (cached.expiresAt < graceExpiry) {
+        this.liveDataCache.delete(stationId);
+      }
+    }
+    
+    const afterCount = this.liveDataCache.size;
+    if (beforeCount !== afterCount) {
+      console.error(`Cache cleanup: removed ${beforeCount - afterCount} expired live data entries`);
     }
   }
 

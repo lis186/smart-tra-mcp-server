@@ -2,7 +2,7 @@
 export default {
   preset: 'ts-jest/presets/default-esm',
   extensionsToTreatAsEsm: ['.ts'],
-  testMatch: ['src/**/*.test.ts'],  // Only test files in src directory
+  testMatch: ['<rootDir>/src/**/*.test.ts', '<rootDir>/tests/**/*.test.ts'],  // Test files in src and tests directories
   transform: {
     '^.+\\.ts$': ['ts-jest', {
       useESM: true,
