@@ -93,14 +93,8 @@ const VALIDATION_BOUNDS = {
 } as const;
 
 // Load environment variables - needed for TDX API credentials
-// Redirect console output temporarily to prevent stdout pollution
-const originalConsoleLog = console.log;
-console.log = () => {}; // Temporarily silence console.log
-try {
-  dotenv.config();
-} finally {
-  console.log = originalConsoleLog; // Restore console.log
-}
+// Use silent dotenv config to prevent stdout pollution in MCP servers
+dotenv.config({ debug: false });
 
 // Utility function to check if running in test environment
 function isTestEnvironment(): boolean {
@@ -1661,6 +1655,21 @@ class SmartTRAServer {
 
   // Determine optimal number of trains to include based on query intent (Stage 8 optimization)
   private getOptimalTrainCount(query: string, totalResults: number): number {
+    // Input validation
+    if (!query || typeof query !== 'string') {
+      console.error('Invalid query provided to getOptimalTrainCount');
+      return 0;
+    }
+    
+    if (typeof totalResults !== 'number' || totalResults < 0) {
+      console.error('Invalid totalResults provided to getOptimalTrainCount:', totalResults);
+      return 0;
+    }
+    
+    if (totalResults === 0) {
+      return 0;
+    }
+    
     const lowerQuery = query.toLowerCase();
     
     // If user explicitly requests all trains, show more (but still limit for context)
@@ -1700,33 +1709,51 @@ class SmartTRAServer {
     filteredResults: any[], 
     query: string
   ): string {
+    // Input validation
+    if (!originStation || !destinationStation || !Array.isArray(filteredResults)) {
+      console.error('Invalid input data provided to createOptimizedStructuredData');
+      return JSON.stringify({ error: 'Invalid input data' });
+    }
+    
     const trainCount = this.getOptimalTrainCount(query, filteredResults.length);
-    const trainsToInclude = filteredResults.slice(0, trainCount);
+    // Pre-slice for efficiency instead of processing all then slicing
+    const trainsToInclude = trainCount > 0 ? filteredResults.slice(0, trainCount) : [];
     
     const compactData = {
       route: {
-        origin: { id: originStation.stationId, name: originStation.name },
-        destination: { id: destinationStation.stationId, name: destinationStation.name }
+        origin: { 
+          id: originStation.stationId || 'unknown', 
+          name: originStation.name || 'Unknown Station' 
+        },
+        destination: { 
+          id: destinationStation.stationId || 'unknown', 
+          name: destinationStation.name || 'Unknown Station' 
+        }
       },
-      date: parsed.date || new Date().toISOString().split('T')[0],
-      totalTrains: timetableData.length,
+      date: parsed?.date || new Date().toISOString().split('T')[0],
+      totalTrains: Array.isArray(timetableData) ? timetableData.length : 0,
       filteredTrains: filteredResults.length,
       shownTrains: trainCount,
       trains: trainsToInclude.map(train => ({
-        trainNo: train.trainNo,
-        trainType: train.trainType,
-        departure: train.departureTime,
-        arrival: train.arrivalTime,
-        travelTime: train.travelTime,
-        monthlyPassEligible: train.isMonthlyPassEligible
+        trainNo: train?.trainNo || 'Unknown',
+        trainType: train?.trainType || 'Unknown',
+        departure: train?.departureTime || 'Unknown',
+        arrival: train?.arrivalTime || 'Unknown',
+        travelTime: train?.travelTime || 'Unknown',
+        monthlyPassEligible: Boolean(train?.isMonthlyPassEligible)
         // Removed: stops, fareInfo, delayMinutes, etc. for context efficiency
       }))
     };
     
-    // Use compact formatting to save space
-    return RESPONSE_CONSTANTS.COMPACT_JSON ? 
-      JSON.stringify(compactData) : 
-      JSON.stringify(compactData, null, 2);
+    try {
+      // Use compact formatting to save space
+      return RESPONSE_CONSTANTS.COMPACT_JSON ? 
+        JSON.stringify(compactData) : 
+        JSON.stringify(compactData, null, 2);
+    } catch (error) {
+      console.error('Error serializing structured data:', error);
+      return JSON.stringify({ error: 'Serialization failed' });
+    }
   }
 
   // Handle search_trains tool request with query parsing
