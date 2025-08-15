@@ -7,7 +7,7 @@
 | Test Category | File | Tests | Status | Coverage |
 |---------------|------|-------|--------|----------|
 | **Query Parser Core** | `src/server.test.ts` | 17 tests | ✅ PASS | Route parsing, validation, edge cases |
-| **Comprehensive Features** | `src/simplified-tests.test.ts` | 19 tests | ✅ PASS | End-to-end functionality, Stage 8 optimizations |
+| **Comprehensive Features** | `src/simplified-tests.test.ts` | 19 tests | ✅ PASS | Stage 8 optimizations, security, performance |
 | **Total** | - | **36 tests** | ✅ **ALL PASS** | **Complete feature coverage** |
 
 ---
