@@ -13,16 +13,20 @@ import { QueryParser, ParsedQuery } from './query-parser.js';
 // These train types are NOT eligible for TPASS monthly pass
 const TPASS_RESTRICTED_TRAIN_TYPES = {
   TAROKO: '1',         // 太魯閣號 (Taroko Express)
-  PUYUMA: '2',         // 普悠瑪號 (Puyuma Express) 
+  PUYUMA: '2',         // 普悠瑪號 (Puyuma Express)
+  BUSINESS: '3',       // 自強(商務) (Business Tze-Chiang) 
+  TEAM_TRAIN: '4',     // 團體列車 (Team Train)
+  DIESEL_TC: '5',      // 自強(柴聯) (Diesel Tze-Chiang)
+  FAST_LOCAL: '10',    // 區間快 (Fast Local) - Actually restricted
   EMU3000: '11'        // 新自強號 EMU3000 (New Tze-Chiang)
 } as const;
 
 // Common eligible train types for reference
 const TPASS_ELIGIBLE_EXAMPLES = {
-  LOCAL: '10',         // 區間車 (Local)
-  FAST_LOCAL: '12',    // 區間快車 (Fast Local) - Note: corrected from '11'
-  CHU_KUANG: '110',    // 莒光號 (Chu-Kuang)
-  TZE_CHIANG: '112'    // 自強號 (Tze-Chiang) - older models
+  LOCAL: '6',          // 區間車 (Local Train)
+  CHU_KUANG: '7',      // 莒光號 (Chu-Kuang)
+  FU_HSING: '8',       // 復興號 (Fu-Hsing)
+  TZE_CHIANG: '9'      // 自強號 (Tze-Chiang) - older push-pull models
 } as const;
 
 const API_CONFIG = {
@@ -681,6 +685,15 @@ class SmartTRAServer {
       const arrivalTime = destinationStop.ArrivalTime || destinationStop.DepartureTime;
       const travelTime = this.calculateTravelTime(departureTime, arrivalTime);
       
+      // Data quality check: Skip trains with abnormally long travel times
+      // Taipei to Taichung should never take more than 5 hours
+      // This filters out bad data from TDX API
+      const travelTimeHours = this.getTravelTimeInHours(departureTime, arrivalTime);
+      if (travelTimeHours > 6) {
+        console.error(`Skipping train ${train.TrainInfo.TrainNo} due to abnormal travel time: ${travelTimeHours} hours`);
+        continue;
+      }
+      
       // Count intermediate stops
       // Note: OD endpoint only returns origin and destination stops, so we use StopSequence
       // to calculate the actual number of intermediate stations
@@ -731,6 +744,24 @@ class SmartTRAServer {
       }
     } catch (error) {
       return '未知';
+    }
+  }
+  
+  // Get travel time in hours for data quality checks
+  private getTravelTimeInHours(departureTime: string, arrivalTime: string): number {
+    try {
+      const departure = new Date(`1970-01-01T${departureTime}`);
+      const arrival = new Date(`1970-01-01T${arrivalTime}`);
+      
+      // Handle next-day arrivals
+      if (arrival < departure) {
+        arrival.setDate(arrival.getDate() + 1);
+      }
+      
+      const diffMs = arrival.getTime() - departure.getTime();
+      return diffMs / (1000 * 60 * 60);
+    } catch (error) {
+      return 0;
     }
   }
 
@@ -1569,7 +1600,11 @@ class SmartTRAServer {
         const backupTrains = filteredResults.filter(train => train.isBackupOption);
         
         if (primaryTrains.length > 0) {
-          responseText += `**月票可搭 (接下來2小時):**\n\n`;
+          // Show appropriate time window message based on whether a specific time was given
+          const timeWindowMessage = parsed.time 
+            ? `目標時間 ${parsed.time} 前後` 
+            : `接下來2小時`;
+          responseText += `**月票可搭 (${timeWindowMessage}):**\n\n`;
           primaryTrains.forEach((train, index) => {
             const passIcon = train.isMonthlyPassEligible ? '🎫' : '💰';
             
@@ -1645,7 +1680,13 @@ class SmartTRAServer {
         }
 
         responseText += `🎫 = 月票可搭 | 💰 = 需另購票 | ⚠️ = 即將發車 | 🚨 = 誤點 | ✅ = 準點\n`;
-        responseText += `時間視窗: 接下來2小時 | 可用 "接下來4小時" 擴展搜尋\n\n`;
+        
+        // Show appropriate time window help text
+        if (parsed.time) {
+          responseText += `時間視窗: 目標時間前1小時到後2小時 | 可用 "接下來4小時" 擴展搜尋\n\n`;
+        } else {
+          responseText += `時間視窗: 接下來2小時 | 可用 "接下來4小時" 擴展搜尋\n\n`;
+        }
         
         // Add fare summary if available
         if (fareInfo) {
