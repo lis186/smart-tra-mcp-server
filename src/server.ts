@@ -2346,8 +2346,10 @@ class SmartTRAServer {
         this.isConnected = false;
         process.exit(0);
       } else {
-        // Re-throw other uncaught exceptions
-        throw error;
+        // Log other uncaught exceptions and exit
+        // Never re-throw from uncaughtException handler as it causes undefined behavior
+        console.error('Uncaught exception:', error);
+        process.exit(1);
       }
     });
 
