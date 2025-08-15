@@ -327,6 +327,7 @@ interface TrainSearchResult {
 class SmartTRAServer {
   private server: Server;
   private isShuttingDown = false;
+  private isConnected = false;
   private requestCount = new Map<string, number>();
   private lastRequestTime = new Map<string, number>();
   private readonly sessionId: string;
@@ -1390,6 +1391,12 @@ class SmartTRAServer {
   private async loadStationData(): Promise<void> {
     if (this.stationDataLoaded) return;
     
+    // Don't attempt to load if not connected to prevent EPIPE errors
+    if (!this.isConnected) {
+      this.stationLoadFailed = true;
+      return;
+    }
+    
     // Avoid repeated failed attempts (retry once per 5 minutes)
     const now = Date.now();
     if (this.stationLoadFailed && (now - this.lastStationLoadAttempt) < 300000) {
@@ -1399,6 +1406,12 @@ class SmartTRAServer {
     this.lastStationLoadAttempt = now;
 
     try {
+      // Check connection before any operations that might output
+      if (!this.isConnected) {
+        this.stationLoadFailed = true;
+        return;
+      }
+      
       console.error('Loading TRA station data from TDX API...');
       const token = await this.getAccessToken();
       const baseUrl = process.env.TDX_BASE_URL || 'https://tdx.transportdata.tw/api/basic';
@@ -1422,9 +1435,16 @@ class SmartTRAServer {
       this.buildSearchIndexes();
       this.stationDataLoaded = true;
       this.stationLoadFailed = false;
-      console.error(`Loaded ${this.stationData.length} TRA stations from TDX API`);
+      
+      // Only log success if still connected
+      if (this.isConnected) {
+        console.error(`Loaded ${this.stationData.length} TRA stations from TDX API`);
+      }
     } catch (error) {
-      console.error('Failed to load station data:', error);
+      // Only log errors if still connected
+      if (this.isConnected) {
+        console.error('Failed to load station data:', error);
+      }
       this.stationDataLoaded = false;
       this.stationLoadFailed = true;
     }
@@ -2294,7 +2314,37 @@ class SmartTRAServer {
 
   async start() {
     const transport = new StdioServerTransport();
+    
+    // Handle EPIPE errors gracefully to prevent crashes when client disconnects
+    process.on('uncaughtException', (error) => {
+      if ((error as any).code === 'EPIPE') {
+        // Client disconnected - mark as disconnected and exit gracefully
+        this.isConnected = false;
+        process.exit(0);
+      } else {
+        // Re-throw other uncaught exceptions
+        throw error;
+      }
+    });
+
+    // Handle transport errors gracefully
+    transport.onclose = () => {
+      this.isConnected = false;
+      process.exit(0);
+    };
+    
+    transport.onerror = (error: any) => {
+      this.isConnected = false;
+      if (error && error.code === 'EPIPE') {
+        // Client disconnected - exit gracefully
+        process.exit(0);
+      } else {
+        console.error('Transport error:', error);
+      }
+    };
+
     await this.server.connect(transport);
+    this.isConnected = true;
     console.error('Smart TRA MCP Server started successfully');
   }
 
