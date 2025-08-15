@@ -27,7 +27,8 @@
       "Bash(git push:*)",
       "Bash(git commit:*)",
       "Bash(timeout:*)",
-      "Bash(touch:*)"
+      "Bash(touch:*)",
+      "Bash(npm run test:parser:*)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits"

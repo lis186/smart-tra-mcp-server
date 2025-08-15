@@ -2338,6 +2338,21 @@ class SmartTRAServer {
       throw new Error('Test methods only available in test environment');
     }
   }
+
+  // Public test wrappers for private handler methods
+  async handleSearchStationForTest(query: string, context?: string): Promise<any> {
+    if (!isTestEnvironment()) {
+      throw new Error('Test methods only available in test environment');
+    }
+    return this.handleSearchStation(query, context);
+  }
+
+  async handleSearchTrainsForTest(query: string, context?: string): Promise<any> {
+    if (!isTestEnvironment()) {
+      throw new Error('Test methods only available in test environment');
+    }
+    return this.handleSearchTrains(query, context);
+  }
 }
 
 // Export the class for testing
