@@ -6,8 +6,36 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import * as dotenv from 'dotenv';
 import { QueryParser, ParsedQuery } from './query-parser.js';
+
+// Load environment variables before any other imports
+// Using process.env directly instead of dotenv to avoid stdout pollution
+// The .env file will be loaded by the dotenv/config import in package.json or manually
+if (process.env.NODE_ENV !== 'production') {
+  try {
+    // Use native fs to read .env file to avoid dotenv stdout pollution
+    const fs = await import('fs');
+    const path = await import('path');
+    const envPath = path.join(process.cwd(), '.env');
+    if (fs.existsSync(envPath)) {
+      const envContent = fs.readFileSync(envPath, 'utf-8');
+      envContent.split('\n').forEach(line => {
+        const trimmedLine = line.trim();
+        if (trimmedLine && !trimmedLine.startsWith('#')) {
+          const [key, ...valueParts] = trimmedLine.split('=');
+          if (key && valueParts.length > 0) {
+            const value = valueParts.join('=').replace(/^["']|["']$/g, '');
+            if (!process.env[key]) {
+              process.env[key] = value;
+            }
+          }
+        }
+      });
+    }
+  } catch (error) {
+    // Silently ignore .env loading errors
+  }
+}
 
 // Constants - TPASS Monthly Pass Restrictions
 // These train types are NOT eligible for TPASS monthly pass
@@ -91,10 +119,6 @@ const VALIDATION_BOUNDS = {
   TIME_WINDOW_MIN: 1,                // Minimum time window in hours
   TIME_WINDOW_MAX: 24                // Maximum time window in hours
 } as const;
-
-// Load environment variables - needed for TDX API credentials
-// Use silent dotenv config to prevent stdout pollution in MCP servers
-dotenv.config({ debug: false });
 
 // Utility function to check if running in test environment
 function isTestEnvironment(): boolean {
