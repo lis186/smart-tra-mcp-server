@@ -24,6 +24,33 @@ export interface ParsedQuery {
 }
 
 export class QueryParser {
+  // English to Chinese station name mapping
+  private readonly ENGLISH_TO_CHINESE_STATIONS = new Map([
+    ['taipei', '台北'],
+    ['taichung', '台中'],
+    ['kaohsiung', '高雄'],
+    ['taoyuan', '桃園'],
+    ['hsinchu', '新竹'],
+    ['keelung', '基隆'],
+    ['chiayi', '嘉義'],
+    ['hualien', '花蓮'],
+    ['taitung', '台東'],
+    ['yilan', '宜蘭'],
+    ['banqiao', '板橋'],
+    ['zhongli', '中壢'],
+    ['zhunan', '竹南'],
+    ['miaoli', '苗栗'],
+    ['fengyuan', '豐原'],
+    ['changhua', '彰化'],
+    ['yuanlin', '員林'],
+    ['douliu', '斗六'],
+    ['huwei', '虎尾'],
+    ['xinying', '新營'],
+    ['yongkang', '永康'],
+    ['gangshan', '岡山'],
+    ['pingtung', '屏東']
+  ]);
+
   // Confidence scoring weights
   private readonly CONFIDENCE_WEIGHTS = {
     LOCATION_PAIR: 0.4,      // Base confidence for finding origin/destination
@@ -41,7 +68,8 @@ export class QueryParser {
   };
 
   private readonly LOCATION_SEPARATORS = [
-    '到', '去', '往', '至', '→', '->', '→', '前往'
+    '到', '去', '往', '至', '→', '->', '→', '前往',
+    'to', 'TO', 'To'
   ];
 
   // Pre-compiled regex patterns optimized for performance
@@ -67,6 +95,7 @@ export class QueryParser {
     STATION_MAJOR: /(?:[台臺](?:北|中|南)|高雄|桃園|新竹|基隆|嘉義|花蓮|台東|宜蘭)/g,
     STATION_COMMON: /(?:板橋|中壢|竹南|苗栗|豐原|彰化|員林|斗六|虎尾|新營|永康|岡山|屏東)/g,
     STATION_GENERIC: /[\u4e00-\u9fff]{2,4}/g,
+    STATION_ENGLISH: /(?:Taipei|Taichung|Kaohsiung|Taoyuan|Hsinchu|Keelung|Chiayi|Hualien|Taitung|Yilan|Banqiao|Zhongli|Zhunan|Miaoli|Fengyuan|Changhua|Yuanlin|Douliu|Huwei|Xinying|Yongkang|Gangshan|Pingtung)(?:\s+(?:Main\s+)?Station)?/gi,
     
     // Preference patterns - using word boundaries for better performance
     PREF_FASTEST: /(?:最快|快速|急行|特急|自強)/,
@@ -208,6 +237,7 @@ export class QueryParser {
     const stationPatterns = [
       this.COMPILED_PATTERNS.STATION_MAJOR,
       this.COMPILED_PATTERNS.STATION_COMMON,
+      this.COMPILED_PATTERNS.STATION_ENGLISH,
       this.COMPILED_PATTERNS.STATION_GENERIC
     ];
 
@@ -247,11 +277,24 @@ export class QueryParser {
    * Clean and normalize location names
    */
   private cleanLocationName(location: string): string {
-    return location
-      .replace(/[\s\n\r\t]+/g, '') // Remove whitespace
-      .replace(/(?:車站|火車站|台鐵站)$/g, '') // Remove station suffixes only at the end
+    let cleaned = location
+      .replace(/[\s\n\r\t]+/g, ' ') // Normalize whitespace (keep spaces for English)
+      .replace(/(?:車站|火車站|台鐵站|Station|Main\s+Station)$/gi, '') // Remove station suffixes
       .replace(/[的]/g, '') // Remove possessive particles
       .trim();
+
+    // Convert English station names to Chinese
+    const englishMatch = cleaned.toLowerCase().replace(/\s+/g, '');
+    if (this.ENGLISH_TO_CHINESE_STATIONS.has(englishMatch)) {
+      return this.ENGLISH_TO_CHINESE_STATIONS.get(englishMatch)!;
+    }
+
+    // Remove remaining whitespace for Chinese names
+    if (/[\u4e00-\u9fff]/.test(cleaned)) {
+      cleaned = cleaned.replace(/\s+/g, '');
+    }
+
+    return cleaned;
   }
 
   /**

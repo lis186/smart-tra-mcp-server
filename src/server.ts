@@ -1359,9 +1359,15 @@ class SmartTRAServer {
         minutesUntilDeparture,
         isLate,
         hasLeft,
-        lateWarning: isLate ? '⚠️ 即將發車' : hasLeft ? '❌ 已發車' : undefined
+        lateWarning: isLate ? '⚠️ 即將發車' : undefined
       };
     });
+    
+    // Filter out trains that have already departed (only for today's queries)
+    const isToday = !targetDate || targetDate === new Date().toISOString().split('T')[0];
+    if (isToday) {
+      filtered = filtered.filter(train => !train.hasLeft);
+    }
     
     // Sort by departure time (upcoming first)
     filtered.sort((a, b) => {
@@ -1388,18 +1394,19 @@ class SmartTRAServer {
           minutesUntilDeparture,
           isLate,
           hasLeft,
-          lateWarning: isLate ? '⚠️ 即將發車' : hasLeft ? '❌ 已發車' : undefined,
+          lateWarning: isLate ? '⚠️ 即將發車' : undefined,
           isBackupOption: !train.isMonthlyPassEligible
         };
       });
       
-      // Filter backup trains within the time window
+      // Filter backup trains within the time window and exclude departed trains
       const backupTrains = allTrains
         .filter(train => {
           const trainTime = this.parseTrainTime(train.departureTime, referenceDate);
           return !train.isMonthlyPassEligible && 
                  trainTime >= minTime && 
-                 trainTime <= maxTime;
+                 trainTime <= maxTime &&
+                 !train.hasLeft;  // Exclude trains that have already departed
         })
         .slice(0, 3 - primaryResults.length);
       
