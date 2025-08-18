@@ -28,7 +28,11 @@ describe('Smart TRA MCP Server - Core Tests', () => {
           { input: '台北到台中', expectedOrigin: '台北', expectedDest: '台中' },
           { input: '台北去台中', expectedOrigin: '台北', expectedDest: '台中' },
           { input: '台北往台中', expectedOrigin: '台北', expectedDest: '台中' },
-          { input: '從台北到台中', expectedOrigin: '從台北', expectedDest: '台中' } // Parser includes prefix
+          { input: '從台北到台中', expectedOrigin: '從台北', expectedDest: '台中' }, // Parser includes prefix
+          // English route patterns
+          { input: 'Taipei to Taichung', expectedOrigin: '台北', expectedDest: '台中' },
+          { input: 'Taipei Station to Kaohsiung', expectedOrigin: '台北', expectedDest: '高雄' },
+          { input: 'Hsinchu to Taoyuan', expectedOrigin: '新竹', expectedDest: '桃園' }
         ];
 
         testCases.forEach(({ input, expectedOrigin, expectedDest }) => {
@@ -113,7 +117,11 @@ describe('Smart TRA MCP Server - Core Tests', () => {
           '台北到台中',
           '台北到台中明天',
           '台北到台中下午2點',
-          '台北到台中明天早上自強號'
+          '台北到台中明天早上自強號',
+          // English queries should also be valid
+          'Taipei to Taichung',
+          'Taipei Station to Kaohsiung today',
+          'Hsinchu to Taoyuan tomorrow'
         ];
 
         validQueries.forEach(query => {
