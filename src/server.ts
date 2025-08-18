@@ -750,7 +750,7 @@ class SmartTRAServer {
     const authUrl = process.env.TDX_AUTH_URL || 'https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token';
 
     if (!clientId || !clientSecret) {
-      const missingVars = [];
+      const missingVars: string[] = [];
       if (!clientId) missingVars.push('TDX_CLIENT_ID');
       if (!clientSecret) missingVars.push('TDX_CLIENT_SECRET');
       
@@ -2333,41 +2333,427 @@ class SmartTRAServer {
 
   // Get detailed train information for exact train number matches
   private async getDetailedTrainInfo(trainNumber: string): Promise<MCPToolResponse> {
-    // TODO: Integrate with TDX SpecificTrainTimetable API
-    // For now, return a structured response
-    
-    return {
-      content: [{
-        type: 'text',
-        text: `🚄 **車次 ${trainNumber} 詳細資訊**\n\n` +
-              `📋 **基本資料**\n` +
-              `• 車種: 自強號 (推拉式自強號)\n` +
-              `• 路線: 臺北 → 高雄\n` +
-              `• 總行程: 4小時57分\n` +
-              `• 月票適用: 🎫 是\n\n` +
-              `⏰ **今日時刻表**\n` +
-              `🚩 臺北     18:59 發車 ✅ 準點\n` +
-              `   板橋     19:08 → 19:09 (1分)\n` +
-              `   桃園     19:32 → 19:34 (2分)\n` +
-              `   新竹     20:15 → 20:17 (2分)\n` +
-              `   臺中     21:28 → 21:31 (3分)\n` +
-              `   嘉義     22:31 → 22:33 (2分)\n` +
-              `   臺南     22:58 → 23:00 (2分)\n` +
-              `🏁 高雄     23:56 到達\n\n` +
-              `📊 **即時狀態**\n` +
-              `• 目前狀態: ✅ 準點行駛\n` +
-              `• 預估位置: 已發車，行駛中\n\n` +
-              `💰 **票價資訊**\n` +
-              `• 全票: $843 | 兒童票: $422 | 敬老愛心票: $422\n\n` +
-              `💡 此車次月票可搭，無需另外購票\n\n` +
-              `🔄 **即將整合 TDX API 提供更精確的即時資訊**`
-      }]
-    };
+    try {
+      // Try to get specific train timetable from TDX API
+      const token = await this.getAccessToken();
+      const baseUrl = process.env.TDX_BASE_URL || 'https://tdx.transportdata.tw/api/basic';
+      
+      // Get timetable data
+      const specificEndpoint = `/v3/Rail/TRA/SpecificTrainTimetable/TrainNo/${trainNumber}?$format=JSON`;
+      const timetableResponse = await this.fetchWithRetry(`${baseUrl}${specificEndpoint}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json'
+        }
+      });
+      
+      const timetableData = await timetableResponse.json() as any;
+      let trainData = null;
+      let source = 'specific';
+
+      if (!timetableData || !timetableData.TrainTimetables || timetableData.TrainTimetables.length === 0) {
+        // If no specific timetable found, try daily timetable
+        const dailyEndpoint = `/v3/Rail/TRA/DailyTrainTimetable/Today?$format=JSON&$filter=TrainInfo/TrainNo eq '${trainNumber}'&$top=1`;
+        const dailyResponse = await this.fetchWithRetry(`${baseUrl}${dailyEndpoint}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Accept': 'application/json'
+          }
+        });
+        
+        const dailyData = await dailyResponse.json() as any;
+
+        if (!dailyData || !dailyData.TrainTimetables || dailyData.TrainTimetables.length === 0) {
+          return {
+            content: [{
+              type: 'text',
+              text: `❌ **車次 ${trainNumber} 查無資料**\n\n` +
+                    `可能原因：\n` +
+                    `• 車次號碼不存在或已停駛\n` +
+                    `• 今日未營運此班次\n` +
+                    `• 輸入的車次號碼有誤\n\n` +
+                    `💡 建議：\n` +
+                    `• 檢查車次號碼是否正確\n` +
+                    `• 嘗試搜尋相似車次: "${trainNumber.substring(0, -1)}"\n` +
+                    `• 或使用路線查詢: "台北到高雄"`
+            }]
+          };
+        }
+
+        trainData = dailyData.TrainTimetables[0];
+        source = 'daily';
+      } else {
+        trainData = timetableData.TrainTimetables[0];
+      }
+
+      // Get live status data
+      let liveData = null;
+      try {
+        const liveEndpoint = `/v3/Rail/TRA/TrainLiveBoard/TrainNo/${trainNumber}?$format=JSON`;
+        const liveResponse = await this.fetchWithRetry(`${baseUrl}${liveEndpoint}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Accept': 'application/json'
+          }
+        });
+        
+        const liveResponseData = await liveResponse.json() as any;
+        if (liveResponseData && liveResponseData.TrainLiveBoards && liveResponseData.TrainLiveBoards.length > 0) {
+          liveData = liveResponseData.TrainLiveBoards;
+        }
+      } catch (error) {
+        this.logError('Error fetching live data', error, { trainNumber });
+        // Continue without live data
+      }
+
+      return this.formatTrainTimetableResponse(trainData, trainNumber, source as 'specific' | 'daily', liveData);
+
+    } catch (error) {
+      this.logError('Error fetching detailed train info', error, { trainNumber });
+      
+      return {
+        content: [{
+          type: 'text',
+          text: `⚠️ **車次 ${trainNumber} 查詢暫時無法使用**\n\n` +
+                `系統正在維護中，請稍後再試。\n\n` +
+                `💡 替代方案：\n` +
+                `• 使用路線查詢: "台北到高雄"\n` +
+                `• 查詢車站資訊: "台北車站時刻表"\n` +
+                `• 或嘗試其他車次`
+        }]
+      };
+    }
   }
+
+  // Format train timetable response from TDX API
+  private formatTrainTimetableResponse(trainData: any, trainNumber: string, source: 'specific' | 'daily', liveData?: any[]): MCPToolResponse {
+    try {
+      const trainInfo = trainData.TrainInfo;
+      const stopTimes = trainData.StopTimes || [];
+
+      // Extract basic train information
+      const trainType = trainInfo.TrainTypeName?.Zh_tw || trainInfo.TrainTypeCode || '未知';
+      const trainClass = trainInfo.TrainClassificationID;
+      const note = trainInfo.Note || '';
+      
+      // Determine if monthly pass eligible (區間車 and some 自強號)
+      const isMonthlyPassEligible = trainType.includes('區間') || 
+                                   (trainType.includes('自強') && trainClass !== '1101'); // 1101 is premium express
+
+      // Format stop times
+      let timetableText = '';
+      if (stopTimes.length > 0) {
+        const origin = stopTimes[0]?.StationName?.Zh_tw || '起點';
+        const destination = stopTimes[stopTimes.length - 1]?.StationName?.Zh_tw || '終點';
+        const departureTime = stopTimes[0]?.DepartureTime || stopTimes[0]?.ArrivalTime;
+        const arrivalTime = stopTimes[stopTimes.length - 1]?.ArrivalTime || stopTimes[stopTimes.length - 1]?.DepartureTime;
+        
+        // Calculate travel time
+        let travelTime = '';
+        if (departureTime && arrivalTime) {
+          const depTime = new Date(`2000-01-01T${departureTime}`);
+          const arrTime = new Date(`2000-01-01T${arrivalTime}`);
+          if (arrTime < depTime) arrTime.setDate(arrTime.getDate() + 1); // Next day arrival
+          
+          const diffMs = arrTime.getTime() - depTime.getTime();
+          const hours = Math.floor(diffMs / (1000 * 60 * 60));
+          const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+          travelTime = `${hours}小時${minutes}分`;
+        }
+
+        timetableText += `🚄 **車次 ${trainNumber} 詳細資訊**\n\n`;
+        timetableText += `📋 **基本資料**\n`;
+        timetableText += `• 車種: ${trainType}\n`;
+        timetableText += `• 路線: ${origin} → ${destination}\n`;
+        if (travelTime) timetableText += `• 總行程: ${travelTime}\n`;
+        timetableText += `• 月票適用: ${isMonthlyPassEligible ? '🎫 是' : '💰 否'}\n`;
+        if (note) timetableText += `• 備註: ${note}\n`;
+        timetableText += `\n⏰ **${source === 'daily' ? '今日' : ''}時刻表**\n`;
+
+        // Create live status lookup for faster access
+        const liveStatusMap = new Map();
+        if (liveData) {
+          liveData.forEach((live: any) => {
+            liveStatusMap.set(live.StationID, live);
+          });
+        }
+
+        // Find current position and overall delay status
+        let currentPosition = null;
+        let overallDelayMinutes = 0;
+        let hasLiveData = false;
+        
+        if (liveData && liveData.length > 0) {
+          hasLiveData = true;
+          // Find the most recent position
+          const sortedLive = liveData.sort((a, b) => {
+            const timeA = new Date(a.UpdateTime || 0).getTime();
+            const timeB = new Date(b.UpdateTime || 0).getTime();
+            return timeB - timeA;
+          });
+          
+          currentPosition = sortedLive[0];
+          overallDelayMinutes = currentPosition.DelayTime || 0;
+        }
+
+        // Format each stop with live status and adjusted times
+        stopTimes.forEach((stop: any, index: number) => {
+          const stationName = stop.StationName?.Zh_tw || stop.StationID;
+          const stationId = stop.StationID;
+          const originalArrTime = stop.ArrivalTime;
+          const originalDepTime = stop.DepartureTime;
+          
+          // Get live status for this station
+          const liveStatus = liveStatusMap.get(stationId);
+          let statusIcon = '';
+          let delayInfo = '';
+          let adjustedArrTime = originalArrTime;
+          let adjustedDepTime = originalDepTime;
+          let delayMinutes = 0;
+          
+          if (liveStatus) {
+            delayMinutes = liveStatus.DelayTime || 0;
+            const trainStationStatus = liveStatus.TrainStationStatus; // 0:'進站中',1:'在站上',2:'已離站'
+            const runningStatus = liveStatus.RunningStatus; // 0:'準點',1:'誤點',2:'取消'
+            
+            // 計算調整後的時間
+            if (delayMinutes > 0 && runningStatus !== 2) {
+              if (originalArrTime) {
+                adjustedArrTime = this.addMinutesToTime(originalArrTime, delayMinutes);
+              }
+              if (originalDepTime) {
+                adjustedDepTime = this.addMinutesToTime(originalDepTime, delayMinutes);
+              }
+            }
+            
+            // 基本延誤狀態 (使用交通燈概念)
+            if (runningStatus === 2) {
+              statusIcon = '❌';
+              delayInfo = ' 取消';
+            } else if (delayMinutes > 10) {
+              statusIcon = '🔴';
+              delayInfo = ` 嚴重誤點${delayMinutes}分`;
+            } else if (delayMinutes > 0 || runningStatus === 1) {
+              statusIcon = '🟡';
+              delayInfo = ` 輕微誤點${delayMinutes}分`;
+            } else {
+              statusIcon = '🟢';
+              delayInfo = ' 準點';
+            }
+            
+            // 車站狀態資訊 (使用更直觀的交通圖示)
+            let stationStatusInfo = '';
+            if (trainStationStatus === 0) {
+              stationStatusInfo = ' 🚈進站中';
+            } else if (trainStationStatus === 1) {
+              stationStatusInfo = ' 🚏停靠中';
+            } else if (trainStationStatus === 2) {
+              stationStatusInfo = ' ➡️已離站';
+            }
+            
+            // 判斷是否為目前位置
+            const isCurrentPosition = currentPosition && currentPosition.StationID === stationId;
+            if (isCurrentPosition) {
+              statusIcon = '🎯' + statusIcon;
+              if (trainStationStatus === 0) {
+                delayInfo = ' 🚈正在進站' + (delayMinutes > 0 ? `(${delayMinutes}分鐘延誤)` : '(準點)');
+              } else if (trainStationStatus === 1) {
+                delayInfo = ' 🚏停靠中' + (delayMinutes > 0 ? `(${delayMinutes}分鐘延誤)` : '(準點)');
+              } else {
+                delayInfo = ' 目前位置' + delayInfo;
+              }
+            } else {
+              delayInfo += stationStatusInfo;
+            }
+          } else if (overallDelayMinutes > 0) {
+            // 如果沒有該站的具體即時資料，但整體有延誤，則使用整體延誤時間
+            if (originalArrTime) {
+              adjustedArrTime = this.addMinutesToTime(originalArrTime, overallDelayMinutes);
+            }
+            if (originalDepTime) {
+              adjustedDepTime = this.addMinutesToTime(originalDepTime, overallDelayMinutes);
+            }
+          }
+          
+          // 格式化時間顯示
+          const formatTimeWithDelay = (originalTime: string, adjustedTime: string, isArrival: boolean = true) => {
+            if (!originalTime) return '';
+            
+            if (originalTime === adjustedTime) {
+              return originalTime;
+            } else {
+              // 顯示調整後時間，並以較小字體顯示原定時間
+              const timeType = isArrival ? '到' : '發';
+              return `${adjustedTime}${timeType} (原定${originalTime})`;
+            }
+          };
+          
+          if (index === 0) {
+            // Origin station
+            const timeDisplay = formatTimeWithDelay(originalDepTime || originalArrTime, adjustedDepTime || adjustedArrTime, false);
+            timetableText += `🚩 ${stationName.padEnd(8)} ${timeDisplay}${statusIcon}${delayInfo}\n`;
+          } else if (index === stopTimes.length - 1) {
+            // Destination station
+            const timeDisplay = formatTimeWithDelay(originalArrTime || originalDepTime, adjustedArrTime || adjustedDepTime, true);
+            timetableText += `🏁 ${stationName.padEnd(8)} ${timeDisplay}${statusIcon}${delayInfo}\n`;
+          } else {
+            // Intermediate stations
+            if (originalArrTime && originalDepTime && originalArrTime !== originalDepTime) {
+              const stopDuration = this.calculateStopDuration(originalArrTime, originalDepTime);
+              const arrDisplay = formatTimeWithDelay(originalArrTime, adjustedArrTime, true);
+              const depDisplay = formatTimeWithDelay(originalDepTime, adjustedDepTime, false);
+              
+              if (adjustedArrTime === originalArrTime && adjustedDepTime === originalDepTime) {
+                // 無延誤，使用原格式
+                timetableText += `   ${stationName.padEnd(8)} ${originalArrTime} → ${originalDepTime} (${stopDuration})${statusIcon}${delayInfo}\n`;
+              } else {
+                // 有延誤，顯示調整後時間
+                timetableText += `   ${stationName.padEnd(8)} ${arrDisplay} → ${depDisplay} (${stopDuration})${statusIcon}${delayInfo}\n`;
+              }
+            } else {
+              const singleTime = originalArrTime || originalDepTime;
+              const adjustedSingleTime = adjustedArrTime || adjustedDepTime;
+              const timeDisplay = formatTimeWithDelay(singleTime, adjustedSingleTime);
+              timetableText += `   ${stationName.padEnd(8)} ${timeDisplay}${statusIcon}${delayInfo}\n`;
+            }
+          }
+        });
+
+        // Add live status summary
+        if (hasLiveData && currentPosition) {
+          const updateTime = new Date(currentPosition.UpdateTime).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
+          const stationName = currentPosition.StationName?.Zh_tw || currentPosition.StationID;
+          const trainStationStatus = currentPosition.TrainStationStatus;
+          const runningStatus = currentPosition.RunningStatus;
+          
+          timetableText += `\n📊 **即時狀態** (${updateTime} 更新)\n`;
+          
+          // 整體運行狀態 (使用交通燈系統)
+          if (runningStatus === 2) {
+            timetableText += `❌ **列車已取消**\n`;
+          } else if (overallDelayMinutes > 10) {
+            timetableText += `🔴 **嚴重誤點 ${overallDelayMinutes} 分鐘**\n`;
+          } else if (overallDelayMinutes > 0 || runningStatus === 1) {
+            timetableText += `🟡 **輕微誤點 ${overallDelayMinutes} 分鐘**\n`;
+          } else {
+            timetableText += `🟢 **目前準點行駛**\n`;
+          }
+          
+          // 目前位置和狀態 (使用更直觀的交通圖示)
+          let positionStatus = '';
+          if (trainStationStatus === 0) {
+            positionStatus = '🚈 正在進站';
+          } else if (trainStationStatus === 1) {
+            positionStatus = '🚏 停靠中';
+          } else if (trainStationStatus === 2) {
+            positionStatus = '➡️ 已離站';
+          }
+          
+          timetableText += `🎯 **${stationName}** ${positionStatus}\n`;
+          
+          // 統計即時資訊覆蓋率
+          const totalStations = stopTimes.length;
+          const stationsWithLiveData = liveData?.length || 0;
+          const coveragePercent = Math.round((stationsWithLiveData / totalStations) * 100);
+          
+          timetableText += `📡 即時資料覆蓋: ${stationsWithLiveData}/${totalStations} 站 (${coveragePercent}%)\n`;
+          
+          // 預估下一站資訊
+          if (trainStationStatus === 2 && runningStatus !== 2) { // 已離站且未取消
+            const currentStationIndex = stopTimes.findIndex((stop: any) => stop.StationID === currentPosition.StationID);
+            if (currentStationIndex >= 0 && currentStationIndex < stopTimes.length - 1) {
+              const nextStation = stopTimes[currentStationIndex + 1];
+              const nextStationName = nextStation.StationName?.Zh_tw || nextStation.StationID;
+              const scheduledArrival = nextStation.ArrivalTime || nextStation.DepartureTime;
+              
+              if (scheduledArrival) {
+                // 計算預估到達時間（加上延誤）
+                const [hours, minutes] = scheduledArrival.split(':').map(Number);
+                const estimatedTime = new Date();
+                estimatedTime.setHours(hours, minutes + overallDelayMinutes, 0, 0);
+                const estimatedArrival = estimatedTime.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
+                
+                timetableText += `⏭️ 下一站: **${nextStationName}** 預估 ${estimatedArrival} 到達\n`;
+              }
+            }
+          }
+          
+          // 終點站預估時間
+          if (runningStatus !== 2 && stopTimes.length > 0) {
+            const finalStation = stopTimes[stopTimes.length - 1];
+            const finalArrival = finalStation.ArrivalTime || finalStation.DepartureTime;
+            if (finalArrival && overallDelayMinutes > 0) {
+              const [hours, minutes] = finalArrival.split(':').map(Number);
+              const estimatedFinalTime = new Date();
+              estimatedFinalTime.setHours(hours, minutes + overallDelayMinutes, 0, 0);
+              const estimatedFinal = estimatedFinalTime.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
+              const finalStationName = finalStation.StationName?.Zh_tw || finalStation.StationID;
+              
+              timetableText += `🏁 **${finalStationName}** 預估 ${estimatedFinal} 到達 (原定 ${finalArrival})\n`;
+            }
+          }
+        }
+
+        // Add monthly pass info
+        if (isMonthlyPassEligible) {
+          timetableText += `\n🎫 **月票適用**\n`;
+          timetableText += `✅ 此班次適用月票優惠\n`;
+          timetableText += `💡 建議搭配月票使用可節省費用\n`;
+        }
+
+        // Add real-time status info
+        timetableText += `\n💡 **提醒**\n`;
+        if (hasLiveData) {
+          timetableText += `• 即時資訊已整合至時刻表中\n`;
+          timetableText += `• 資料每分鐘更新，實際狀況請以車站公告為準\n`;
+        } else {
+          timetableText += `• 即時資訊暫時無法取得\n`;
+          timetableText += `• 實際發車時間請以車站公告為準\n`;
+        }
+        
+      } else {
+        timetableText = `🚄 **車次 ${trainNumber}**\n\n車種: ${trainType}\n\n⚠️ 詳細時刻表資料暫時無法取得`;
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: timetableText
+        }]
+      };
+
+    } catch (error) {
+      this.logError('Error formatting train timetable response', error, { trainNumber, source });
+      
+      return {
+        content: [{
+          type: 'text',
+          text: `🚄 **車次 ${trainNumber}**\n\n❌ 時刻表格式化失敗\n請稍後再試或聯繫系統管理員`
+        }]
+      };
+    }
+  }
+
+  // Helper function to calculate stop duration
+  private calculateStopDuration(arrivalTime: string, departureTime: string): string {
+    try {
+      const arrTime = new Date(`2000-01-01T${arrivalTime}`);
+      const depTime = new Date(`2000-01-01T${departureTime}`);
+      
+      const diffMs = depTime.getTime() - arrTime.getTime();
+      const minutes = Math.round(diffMs / (1000 * 60));
+      
+      return `${minutes}分`;
+    } catch {
+      return '停車';
+    }
+  }
+
+
 
   // Generate suggestions for incomplete queries
   private generateSuggestions(parsed: ParsedQuery): string {
-    const missing = [];
+    const missing: string[] = [];
     
     if (!parsed.origin) {
       missing.push('• Starting station (e.g., "台北", "高雄")');
