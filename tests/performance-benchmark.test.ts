@@ -49,8 +49,22 @@ describe('Performance Benchmarks', () => {
     server = new SmartTRAServer();
     server.resetRateLimitingForTest();
     
-    // Wait for station data to load
-    await new Promise(resolve => setTimeout(resolve, 100));
+    // Load mock station data for testing
+    const mockStationData = [
+      {
+        StationID: '1000',
+        StationName: { Zh_tw: '臺北', En: 'Taipei' },
+        StationAddress: '臺北市中正區黎明里北平西路3號',
+        StationPosition: { PositionLat: 25.047778, PositionLon: 121.517222 }
+      },
+      {
+        StationID: '1020',
+        StationName: { Zh_tw: '臺中', En: 'Taichung' },
+        StationAddress: '臺中市中區綠川里建國路172號',
+        StationPosition: { PositionLat: 24.137467, PositionLon: 120.686873 }
+      }
+    ];
+    await server.loadStationDataForTest(mockStationData);
   });
   
   afterEach(() => {

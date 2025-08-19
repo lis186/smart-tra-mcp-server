@@ -152,8 +152,8 @@ describe('Train Description Improvements (PR #15)', () => {
     server = new SmartTRAServer();
     server.resetRateLimitingForTest();
     
-    // Wait for station data to load
-    await new Promise(resolve => setTimeout(resolve, 100));
+    // Load mock station data for testing
+    await server.loadStationDataForTest(mockStationData);
   });
 
   afterEach(() => {

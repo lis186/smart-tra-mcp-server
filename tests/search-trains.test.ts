@@ -159,8 +159,8 @@ describe('Stage 6: search_trains Tool', () => {
     server = new SmartTRAServer();
     server.resetRateLimitingForTest();
     
-    // Wait for station data to load
-    await new Promise(resolve => setTimeout(resolve, 100));
+    // Load mock station data for testing
+    await server.loadStationDataForTest(mockStationData);
   });
 
   describe('TDX API Integration', () => {

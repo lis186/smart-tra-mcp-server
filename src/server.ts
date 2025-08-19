@@ -3088,6 +3088,32 @@ class SmartTRAServer {
     throw new Error('Test methods only available in test environment');
   }
 
+  // Test helper to load station data without connection check
+  async loadStationDataForTest(mockData?: any[]): Promise<void> {
+    if (!isTestEnvironment()) {
+      throw new Error('This method is only available in test environment');
+    }
+    
+    if (mockData) {
+      // Use provided mock data
+      this.stationData = mockData;
+      this.stationDataLoaded = true;
+      this.stationLoadFailed = false;
+      this.buildSearchIndexes(); // Build search indexes for the mock data
+      console.error(`Loaded ${mockData.length} mock stations for testing`);
+    } else {
+      // Try to load from API but skip connection check
+      const originalIsConnected = this.isConnected;
+      this.isConnected = true; // Temporarily set to true for loading
+      
+      try {
+        await this.loadStationData();
+      } finally {
+        this.isConnected = originalIsConnected; // Restore original state
+      }
+    }
+  }
+
   checkRateLimitForTest(clientId: string): void {
     if (isTestEnvironment()) {
       this.checkRateLimit(clientId);
