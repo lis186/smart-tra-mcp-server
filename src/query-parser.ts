@@ -11,6 +11,9 @@ export interface ParsedQuery {
   destination?: string;
   date?: string;
   time?: string;
+  trainNumber?: string;
+  isPartialTrainNumber?: boolean;
+  trainNumberQuery?: boolean;
   preferences?: {
     fastest?: boolean;
     cheapest?: boolean;
@@ -97,6 +100,12 @@ export class QueryParser {
     STATION_GENERIC: /[\u4e00-\u9fff]{2,4}/g,
     STATION_ENGLISH: /(?:Taipei|Taichung|Kaohsiung|Taoyuan|Hsinchu|Keelung|Chiayi|Hualien|Taitung|Yilan|Banqiao|Zhongli|Zhunan|Miaoli|Fengyuan|Changhua|Yuanlin|Douliu|Huwei|Xinying|Yongkang|Gangshan|Pingtung)(?:\s+(?:Main\s+)?Station)?/gi,
     
+    // Train number patterns - NEW
+    TRAIN_NUMBER_PURE: /^(\d{1,4})$/,                           // 純數字: "2", "152", "1234"
+    TRAIN_NUMBER_WITH_TYPE: /(自強|莒光|區間|普悠瑪|太魯閣)號?\s*(\d{1,4})/,  // 含車種: "自強152"
+    TRAIN_NUMBER_WITH_SUFFIX: /(\d{1,4})號?列車/,               // 含後綴: "152號列車"
+    TRAIN_NUMBER_STATUS: /(\d{1,4})號?(列車)?(準點|誤點|位置|狀況|時刻表|停靠站)/,  // 狀態查詢
+    
     // Preference patterns - using word boundaries for better performance
     PREF_FASTEST: /(?:最快|快速|急行|特急|自強)/,
     PREF_CHEAPEST: /(?:最便宜|便宜|省錢|經濟)/,
@@ -139,6 +148,23 @@ export class QueryParser {
       rawQuery: normalizedQuery,
       matchedPatterns: []
     };
+
+    // 0. Check for train number queries FIRST (before location parsing)
+    const trainNumberMatch = this.extractTrainNumber(normalizedQuery);
+    if (trainNumberMatch.trainNumber) {
+      result.trainNumber = trainNumberMatch.trainNumber;
+      result.trainNumberQuery = true;
+      result.isPartialTrainNumber = trainNumberMatch.isPartial;
+      confidence += trainNumberMatch.confidence;
+      matchedPatterns.push('train_number');
+      
+      // If it's a pure train number query, return early with high confidence
+      if (trainNumberMatch.isPure) {
+        result.confidence = Math.min(confidence, 1.0);
+        result.matchedPatterns = matchedPatterns;
+        return result;
+      }
+    }
 
     // 1. Extract origin and destination using separators
     const locationMatch = this.extractLocations(normalizedQuery);
@@ -531,9 +557,87 @@ export class QueryParser {
   }
 
   /**
+   * Extract train number from query
+   */
+  private extractTrainNumber(query: string): {
+    trainNumber?: string;
+    isPartial: boolean;
+    isPure: boolean;
+    confidence: number;
+  } {
+    // 1. Check for pure number (highest priority)
+    const pureNumberMatch = query.match(this.COMPILED_PATTERNS.TRAIN_NUMBER_PURE);
+    if (pureNumberMatch) {
+      const trainNumber = pureNumberMatch[1];
+      return {
+        trainNumber,
+        isPartial: trainNumber.length <= 2, // 1-2 digits considered partial
+        isPure: true,
+        confidence: trainNumber.length >= 3 ? 0.9 : 0.7 // Lower confidence for very short numbers
+      };
+    }
+
+    // 2. Check for train number with type (e.g., "自強152")
+    const withTypeMatch = query.match(this.COMPILED_PATTERNS.TRAIN_NUMBER_WITH_TYPE);
+    if (withTypeMatch) {
+      const trainType = withTypeMatch[1];
+      const trainNumber = withTypeMatch[2];
+      return {
+        trainNumber,
+        isPartial: false,
+        isPure: false,
+        confidence: 0.8
+      };
+    }
+
+    // 3. Check for train number with suffix (e.g., "152號列車")
+    const withSuffixMatch = query.match(this.COMPILED_PATTERNS.TRAIN_NUMBER_WITH_SUFFIX);
+    if (withSuffixMatch) {
+      const trainNumber = withSuffixMatch[1];
+      return {
+        trainNumber,
+        isPartial: false,
+        isPure: false,
+        confidence: 0.8
+      };
+    }
+
+    // 4. Check for status queries (e.g., "152準點嗎")
+    const statusMatch = query.match(this.COMPILED_PATTERNS.TRAIN_NUMBER_STATUS);
+    if (statusMatch) {
+      const trainNumber = statusMatch[1];
+      return {
+        trainNumber,
+        isPartial: false,
+        isPure: false,
+        confidence: 0.7
+      };
+    }
+
+    return {
+      isPartial: false,
+      isPure: false,
+      confidence: 0
+    };
+  }
+
+  /**
    * Validate if parsed query has minimum required information
    */
   isValidForTrainSearch(parsed: ParsedQuery): boolean {
+    // Train number queries are always valid if we have a train number
+    if (parsed.trainNumberQuery && parsed.trainNumber) {
+      return true;
+    }
+    
+    // Traditional route queries need origin and destination
     return !!(parsed.origin && parsed.destination && parsed.confidence >= this.VALIDATION_THRESHOLDS.MIN_CONFIDENCE);
+  }
+
+  /**
+   * Check if this is a train number only query
+   */
+  isTrainNumberQuery(parsed: ParsedQuery): boolean {
+    return !!(parsed.trainNumberQuery && parsed.trainNumber && !parsed.origin && !parsed.destination);
   }
 }

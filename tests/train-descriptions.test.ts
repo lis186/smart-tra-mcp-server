@@ -4,7 +4,8 @@
  * Tests the directOnly filtering functionality
  */
 
-import { SmartTRAServer } from '../src/server';
+import { SmartTRAServer } from '../src/server.js';
+import { mockFetch } from './setup.js';
 
 // Mock TRA train timetable data with different stop configurations
 const mockTrainDataWithStops = [
@@ -128,10 +129,10 @@ describe('Train Description Improvements (PR #15)', () => {
 
   beforeEach(async () => {
     // Reset fetch mock
-    (fetch as jest.MockedFunction<typeof fetch>).mockReset();
+    mockFetch.mockReset();
     
     // Mock successful token response
-    (fetch as jest.MockedFunction<typeof fetch>)
+    mockFetch
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({
@@ -142,7 +143,7 @@ describe('Train Description Improvements (PR #15)', () => {
       } as Response);
     
     // Mock successful station data response  
-    (fetch as jest.MockedFunction<typeof fetch>)
+    mockFetch
       .mockResolvedValueOnce({
         ok: true,
         json: async () => mockStationData
@@ -151,8 +152,8 @@ describe('Train Description Improvements (PR #15)', () => {
     server = new SmartTRAServer();
     server.resetRateLimitingForTest();
     
-    // Wait for station data to load
-    await new Promise(resolve => setTimeout(resolve, 100));
+    // Load mock station data for testing
+    await server.loadStationDataForTest(mockStationData);
   });
 
   afterEach(() => {
@@ -165,7 +166,7 @@ describe('Train Description Improvements (PR #15)', () => {
       jest.spyOn(Date, 'now').mockReturnValue(new Date('2025-08-14T07:00:00').getTime());
       
       // Mock train timetable response with mock data containing stops
-      (fetch as jest.MockedFunction<typeof fetch>)
+      mockFetch
         .mockResolvedValue({
           ok: true,
           json: async () => ({
@@ -239,7 +240,7 @@ describe('Train Description Improvements (PR #15)', () => {
   describe('DirectOnly Filtering', () => {
     beforeEach(() => {
       // Mock the date range response for TDX v3 API
-      (fetch as jest.MockedFunction<typeof fetch>)
+      mockFetch
         .mockResolvedValueOnce({
           ok: true,
           json: async () => ({
@@ -393,7 +394,7 @@ describe('Train Description Improvements (PR #15)', () => {
       jest.spyOn(Date, 'now').mockReturnValue(new Date('2025-08-14T07:00:00').getTime());
       
       // Mock the complete flow: date range, then train data
-      (fetch as jest.MockedFunction<typeof fetch>)
+      mockFetch
         .mockResolvedValueOnce({
           ok: true,
           json: async () => ({

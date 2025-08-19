@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Smart TRA MCP Server - An intelligent Taiwan Railway Administration (TRA) query server following the Model Context Protocol (MCP) design philosophy. This project integrates TDX (Transport Data eXchange) Taiwan railway APIs through natural language interfaces, providing train schedules, real-time information, fare queries, and trip planning.
 
-**Project Status**: Active Development - Stage 1 Complete
+**Project Status**: Active Development - Stage 6 Complete + Advanced Features
 
-**🎯 Current Status**: Stage 1 Complete - MCP Foundation Validated
+**🎯 Current Status**: Stage 6 Complete + Advanced Features - search_trains with Live Status & Delay Adjustment
 
 ## Commands
 
@@ -37,17 +37,24 @@ Following the Shopify Storefront MCP design philosophy:
 - **Unified parameters**: All tools use `query` (required) + `context` (optional) strings only
 - **Business value focus**: Every tool solves a real user problem
 
-### Planned Tools (3)
+### Implemented Tools (2/3 Complete)
 
-1. **`search_trains`** - Query train schedules, real-time status, and fares
+1. **`search_trains`** - Query train schedules, real-time status, and fares ✅ **COMPLETE**
    - Natural language queries like "Tomorrow morning 8am Taipei to Taichung fastest train"
    - Intelligent routing to appropriate TDX APIs (timetables, live boards, fares)
+   - **NEW**: Train number direct queries (e.g., "152", "1234號列車")
+   - **NEW**: Smart completion with intelligent suggestions
+   - **NEW**: Real-time live status integration (TrainLiveBoard API)
+   - **NEW**: Enhanced visual design with modern emoji system (🟢🟡🔴 traffic lights)
+   - **NEW**: Delay time adjustment - automatic calculation of adjusted arrival/departure times
 
-2. **`search_station`** - Station discovery and confirmation
+2. **`search_station`** - Station discovery and confirmation ✅ **COMPLETE**
    - Handle ambiguous station names, provide candidates with confidence scores
    - Support both TRA and Alishan Forest Railway (AFR)
+   - Fuzzy matching with confidence scoring
+   - Common abbreviations support (北車 → 臺北)
 
-3. **`plan_trip`** - Trip planning and recommendations
+3. **`plan_trip`** - Trip planning and recommendations ⏳ **PLANNED**
    - Provide actionable suggestions based on schedules and real-time data
    - Include backup options and transfer recommendations
 
@@ -351,14 +358,28 @@ smart-tra-mcp-server/
 └── CLAUDE.md                # This file
 ```
 
+## Completed Features
+
+1. ✅ **Stage 1**: Initialize npm project with TypeScript configuration
+2. ✅ **Stage 2**: STDIO Transport - Claude Desktop integration working
+3. ✅ **Stage 3**: TDX Authentication - OAuth client implemented
+4. ✅ **Stage 4**: `search_station` tool - Fuzzy matching with confidence scoring
+5. ✅ **Stage 5**: Rule-based query parsing - 84% success rate
+6. ✅ **Stage 6**: `search_trains` tool - Complete with fare integration
+7. ✅ **Stage 8**: Response size optimization - 60-85% reduction
+8. ✅ **Advanced Features**: 
+   - Train number direct queries with smart completion
+   - Real timetable integration (TDX SpecificTrainTimetable/DailyTrainTimetable APIs)
+   - Live status integration (TrainLiveBoard API)
+   - Enhanced visual design (🟢🟡🔴 traffic lights, 🚈🚏➡️ transit icons)
+   - **Delay time adjustment** - automatic calculation of adjusted times based on delays
+
 ## Next Steps
 
-1. ✅ ~~Initialize npm project with TypeScript configuration~~ (Stage 1 Complete)
-2. ✅ ~~Set up basic MCP server structure~~ (Stage 1 Complete)
-3. Stage 2: STDIO Transport - Test with Claude Desktop
-4. Stage 3: TDX Authentication - Implement OAuth client
-5. Stage 4: Implement `search_station` tool
-6. Continue with remaining stages per IMPLEMENTATION_PLAN.md
+1. **Stage 7**: Basic deployment to Google Cloud Run
+2. **Stage 9**: Implement `plan_trip` tool for trip planning
+3. **Phase 2**: Basic transfer planning (main↔branch lines)
+4. **Phase 3**: Intelligent transfers with real-time delay considerations
 
 ## Implementation Best Practices
 

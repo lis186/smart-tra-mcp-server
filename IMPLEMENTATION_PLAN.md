@@ -343,8 +343,14 @@
 - ✅ Robust error handling for API failures and invalid routes
 - ✅ Machine-readable JSON output with fare information
 - ✅ MCP tool fully functional with natural language queries
+- ✅ **Train Number Query Support** (direct train lookup by number)
+- ✅ **Smart Train Search Engine** (intelligent suggestions and previews)
+- ✅ **Real Timetable Integration** (TDX SpecificTrainTimetable/DailyTrainTimetable APIs)
+- ✅ **Live Status Integration** (TrainLiveBoard API with position tracking)
+- ✅ **Enhanced Visual Design** (modern emoji system: 🟢🟡🔴 traffic lights, 🚈🚏➡️ transit icons)
+- ✅ **Delay Time Adjustment** (automatic calculation of adjusted arrival/departure times based on delays)
 
-**Key Decision Point**: ✅ search_station + search_trains both working with complete fare integration - MVP ready for deployment
+**Key Decision Point**: ✅ search_station + search_trains both working with complete fare integration + live status + delay adjustment - Advanced MVP ready for deployment
 
 ---
 

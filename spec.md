@@ -124,6 +124,15 @@ graph TB
   - 遲到判斷：到站時間 ≤ 目標時間 + 15 分鐘 → 視為準時
   - 顯示：是否會遲到、下一班倒數、備援 ≥ 2 班、延誤透明
   - 可解析到達時限語意（例如「≤08:30」）回推最晚上車班次
+- **車次專查功能（已實作）**：
+  - 支援車次號碼專查（如「152」、「1234號列車」）
+  - 智慧補全：提供相似車次建議與即時預覽
+  - 詳細時刻表：整合 TDX SpecificTrainTimetable/DailyTrainTimetable API
+  - **即時狀態顯示**：整合 TrainLiveBoard API，顯示：
+    - 列車當前位置與狀態（🚈進站中、🚏停靠中、➡️已離站）
+    - 誤點資訊（🟢準點、🟡輕微誤點、🔴嚴重誤點）
+    - **調整後時間**：根據誤點自動計算預估到站/離站時間
+    - 即時資料覆蓋率與下一站預估
 - 路由策略：
   - 時刻表：Daily/General/Station timetable（依 `entities`）
   - 即時：StationLiveBoard / TrainLiveBoard
