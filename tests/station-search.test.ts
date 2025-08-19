@@ -4,6 +4,7 @@
  */
 
 import { SmartTRAServer } from '../src/server';
+import { mockFetch } from './setup';
 
 // Mock TRA station data for testing
 const mockStationData = [
@@ -38,18 +39,18 @@ process.env.TDX_CLIENT_ID = 'test_client_id';
 process.env.TDX_CLIENT_SECRET = 'test_client_secret';
 process.env.NODE_ENV = 'test';
 
-// Mock fetch for TDX API calls
-global.fetch = jest.fn();
+// Use the properly typed mock fetch from setup
+global.fetch = mockFetch;
 
 describe('Station Search Performance and Accuracy', () => {
   let server: SmartTRAServer;
 
   beforeEach(async () => {
     // Reset fetch mock
-    (fetch as jest.MockedFunction<typeof fetch>).mockReset();
+    mockFetch.mockReset();
     
     // Mock successful token response
-    (fetch as jest.MockedFunction<typeof fetch>)
+    mockFetch
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({
@@ -60,7 +61,7 @@ describe('Station Search Performance and Accuracy', () => {
       } as Response);
     
     // Mock successful station data response  
-    (fetch as jest.MockedFunction<typeof fetch>)
+    mockFetch
       .mockResolvedValueOnce({
         ok: true,
         json: async () => mockStationData
@@ -79,7 +80,7 @@ describe('Station Search Performance and Accuracy', () => {
 
   describe('Exact Match Search', () => {
     test('should find exact Chinese station name', async () => {
-      const result = await server['handleSearchStation']('臺北');
+      const result = await server['handleSearchStation']('臺北', '');
       
       expect(result.content[0].text).toContain('✅ Found station: **臺北**');
       expect(result.content[0].text).toContain('Station ID: 1000');
@@ -87,7 +88,7 @@ describe('Station Search Performance and Accuracy', () => {
     });
 
     test('should find exact English station name', async () => {
-      const result = await server['handleSearchStation']('taipei');
+      const result = await server['handleSearchStation']('taipei', '');
       
       expect(result.content[0].text).toContain('Found station: **臺北**');
       expect(result.content[0].text).toContain('Station ID: 1000');
@@ -96,21 +97,21 @@ describe('Station Search Performance and Accuracy', () => {
 
   describe('Fuzzy Matching', () => {
     test('should handle common abbreviations', async () => {
-      const result = await server['handleSearchStation']('北車');
+      const result = await server['handleSearchStation']('北車', '');
       
       expect(result.content[0].text).toContain('Found station: **臺北**');
       expect(result.content[0].text).toContain('Station ID: 1000');
     });
 
     test('should normalize traditional/simplified characters', async () => {
-      const result = await server['handleSearchStation']('台北');
+      const result = await server['handleSearchStation']('台北', '');
       
       expect(result.content[0].text).toContain('Found station: **臺北**');
       expect(result.content[0].text).toContain('Station ID: 1000');
     });
 
     test('should return multiple results with confidence scores', async () => {
-      const result = await server['handleSearchStation']('tai');
+      const result = await server['handleSearchStation']('tai', '');
       
       // Should contain both stations in some form (main result + alternatives)
       expect(result.content[0].text).toContain('Station ID: 3300'); // Taichung (main result)
@@ -120,14 +121,14 @@ describe('Station Search Performance and Accuracy', () => {
 
   describe('Search Performance', () => {
     test('should handle empty or invalid queries gracefully', async () => {
-      const result = await server['handleSearchStation']('');
+      const result = await server['handleSearchStation']('', '');
       
       expect(result.content[0].text).toContain('❌ No stations found');
       expect(result.content[0].text).toContain('Suggestions:');
     });
 
     test('should return helpful suggestions for no matches', async () => {
-      const result = await server['handleSearchStation']('nonexistent');
+      const result = await server['handleSearchStation']('nonexistent', '');
       
       expect(result.content[0].text).toContain('❌ No stations found');
       expect(result.content[0].text).toContain('Check spelling');
@@ -143,7 +144,7 @@ describe('Station Search Performance and Accuracy', () => {
 
   describe('Response Format', () => {
     test('should include structured JSON data', async () => {
-      const result = await server['handleSearchStation']('臺北');
+      const result = await server['handleSearchStation']('臺北', '');
       
       expect(result.content[0].text).toContain('Machine-readable data:');
       expect(result.content[0].text).toContain('```json');
@@ -152,7 +153,7 @@ describe('Station Search Performance and Accuracy', () => {
     });
 
     test('should include address and coordinates when available', async () => {
-      const result = await server['handleSearchStation']('板橋');
+      const result = await server['handleSearchStation']('板橋', '');
       
       expect(result.content[0].text).toContain('Address:');
       expect(result.content[0].text).toContain('Coordinates: 25.01434, 121.46374');
@@ -165,7 +166,7 @@ describe('Station Search Performance and Accuracy', () => {
       serverWithNoData['stationDataLoaded'] = false;
       serverWithNoData['stationLoadFailed'] = true;
       
-      const result = await serverWithNoData['handleSearchStation']('台北');
+      const result = await serverWithNoData['handleSearchStation']('台北', '');
       
       expect(result.content[0].text).toContain('⚠️ Station data is not available');
     });
@@ -177,7 +178,7 @@ describe('Station Search Performance and Accuracy', () => {
         throw new Error('Search error');
       });
       
-      const result = await server['handleSearchStation']('台北');
+      const result = await server['handleSearchStation']('台北', '');
       
       expect(result.content[0].text).toContain('❌ Error searching stations');
       
@@ -198,7 +199,7 @@ describe('Token Caching Race Conditions', () => {
   test('should handle concurrent token refresh requests', async () => {
     let tokenRequestCount = 0;
     
-    (fetch as jest.MockedFunction<typeof fetch>).mockImplementation(async (url) => {
+    mockFetch.mockImplementation(async (url) => {
       if (typeof url === 'string' && url.includes('token')) {
         tokenRequestCount++;
         // Simulate network delay

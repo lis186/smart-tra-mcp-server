@@ -3115,8 +3115,12 @@ class SmartTRAServer {
 // Export the class for testing
 export { SmartTRAServer };
 
-const server = new SmartTRAServer();
-server.start().catch((error) => {
-  console.error('Failed to start server:', error);
-  process.exit(EXIT_CODES.ERROR);
-});
+// Only start the server if this is the main module (not imported)
+// Check if running directly (not in test environment)
+if (!isTestEnvironment() && process.argv[1]?.endsWith('server.js')) {
+  const server = new SmartTRAServer();
+  server.start().catch((error) => {
+    console.error('Failed to start server:', error);
+    process.exit(EXIT_CODES.ERROR);
+  });
+}

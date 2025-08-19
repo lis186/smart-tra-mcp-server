@@ -3,7 +3,8 @@
  * Tests TDX API integration, train filtering, and response formatting
  */
 
-import { SmartTRAServer } from '../src/server';
+import { SmartTRAServer } from '../src/server.js';
+import { mockFetch } from './setup.js';
 
 // Mock TRA train timetable data in v3 API format
 const mockTrainData = [
@@ -135,10 +136,10 @@ describe('Stage 6: search_trains Tool', () => {
 
   beforeEach(async () => {
     // Reset fetch mock
-    (fetch as jest.MockedFunction<typeof fetch>).mockReset();
+    mockFetch.mockReset();
     
     // Mock successful token response
-    (fetch as jest.MockedFunction<typeof fetch>)
+    mockFetch
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({
@@ -149,7 +150,7 @@ describe('Stage 6: search_trains Tool', () => {
       } as Response);
     
     // Mock successful station data response  
-    (fetch as jest.MockedFunction<typeof fetch>)
+    mockFetch
       .mockResolvedValueOnce({
         ok: true,
         json: async () => mockStationData
@@ -165,7 +166,7 @@ describe('Stage 6: search_trains Tool', () => {
   describe('TDX API Integration', () => {
     test('should call TDX Daily Train Timetable API', async () => {
       // Mock date range response first
-      (fetch as jest.MockedFunction<typeof fetch>)
+      mockFetch
         .mockResolvedValueOnce({
           ok: true,
           json: async () => ({
@@ -203,7 +204,7 @@ describe('Stage 6: search_trains Tool', () => {
 
     test('should handle TDX API errors gracefully', async () => {
       // Mock API error
-      (fetch as jest.MockedFunction<typeof fetch>)
+      mockFetch
         .mockResolvedValueOnce({
           ok: false,
           status: 500,
@@ -220,7 +221,7 @@ describe('Stage 6: search_trains Tool', () => {
   describe('Train Data Processing', () => {
     beforeEach(() => {
       // Mock v3 API responses for all tests
-      (fetch as jest.MockedFunction<typeof fetch>)
+      mockFetch
         .mockResolvedValue({
           ok: true,
           json: async () => ({
@@ -263,7 +264,7 @@ describe('Stage 6: search_trains Tool', () => {
       // Mock current time to be 07:00 AM local time for consistent testing
       jest.spyOn(Date, 'now').mockReturnValue(new Date('2025-08-13T07:00:00+08:00').getTime());
       
-      (fetch as jest.MockedFunction<typeof fetch>)
+      mockFetch
         .mockResolvedValue({
           ok: true,
           json: async () => ({
@@ -325,7 +326,7 @@ describe('Stage 6: search_trains Tool', () => {
 
   describe('Query Processing Integration', () => {
     beforeEach(() => {
-      (fetch as jest.MockedFunction<typeof fetch>)
+      mockFetch
         .mockResolvedValue({
           ok: true,
           json: async () => mockTrainData
@@ -359,7 +360,7 @@ describe('Stage 6: search_trains Tool', () => {
       jest.spyOn(Date, 'now').mockReturnValue(new Date('2025-08-14T07:00:00').getTime());
       
       // Mock the date range response first, then train data
-      (fetch as jest.MockedFunction<typeof fetch>)
+      mockFetch
         .mockResolvedValueOnce({
           ok: true,
           json: async () => ({
@@ -406,7 +407,7 @@ describe('Stage 6: search_trains Tool', () => {
 
     test('should handle no trains found scenario', async () => {
       // Mock empty response
-      (fetch as jest.MockedFunction<typeof fetch>)
+      mockFetch
         .mockResolvedValueOnce({
           ok: true,
           json: async () => []
@@ -423,7 +424,7 @@ describe('Stage 6: search_trains Tool', () => {
   describe('Data Availability Handling', () => {
     test('should provide detailed error message when no trains found', async () => {
       // Mock complete setup: auth token, station data, then empty timetable
-      (fetch as jest.MockedFunction<typeof fetch>)
+      mockFetch
         .mockResolvedValueOnce({
           ok: true,
           json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
@@ -451,7 +452,7 @@ describe('Stage 6: search_trains Tool', () => {
   describe('Live Data Integration', () => {
     test('should handle live data API unavailability gracefully', async () => {
       // Mock auth token first, then 404 for live data API
-      (fetch as jest.MockedFunction<typeof fetch>)
+      mockFetch
         .mockResolvedValueOnce({
           ok: true,
           json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
@@ -469,7 +470,7 @@ describe('Stage 6: search_trains Tool', () => {
 
     test('should handle empty live data response', async () => {
       // Mock auth token first, then empty live data
-      (fetch as jest.MockedFunction<typeof fetch>)
+      mockFetch
         .mockResolvedValueOnce({
           ok: true,
           json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
@@ -486,7 +487,7 @@ describe('Stage 6: search_trains Tool', () => {
 
     test('should handle live data network errors', async () => {
       // Mock auth token first, then network error for live data
-      (fetch as jest.MockedFunction<typeof fetch>)
+      mockFetch
         .mockResolvedValueOnce({
           ok: true,
           json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
@@ -510,7 +511,7 @@ describe('Stage 6: search_trains Tool', () => {
       ];
 
       // Mock auth token first, then live data
-      (fetch as jest.MockedFunction<typeof fetch>)
+      mockFetch
         .mockResolvedValueOnce({
           ok: true,
           json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
@@ -527,7 +528,7 @@ describe('Stage 6: search_trains Tool', () => {
 
     test('should handle non-array live data response', async () => {
       // Mock auth token first, then malformed response
-      (fetch as jest.MockedFunction<typeof fetch>)
+      mockFetch
         .mockResolvedValueOnce({
           ok: true,
           json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
@@ -554,7 +555,7 @@ describe('Stage 6: search_trains Tool', () => {
     });
 
     test('should handle network errors gracefully', async () => {
-      (fetch as jest.MockedFunction<typeof fetch>)
+      mockFetch
         .mockRejectedValueOnce(new Error('Network error'));
 
       const result = await server['handleSearchTrains']('台北到台中');
@@ -565,7 +566,7 @@ describe('Stage 6: search_trains Tool', () => {
 
   describe('Fare Integration', () => {
     beforeEach(() => {
-      (fetch as jest.MockedFunction<typeof fetch>)
+      mockFetch
         .mockResolvedValue({
           ok: true,
           json: async () => mockTrainData
@@ -574,7 +575,7 @@ describe('Stage 6: search_trains Tool', () => {
 
     test('should fetch fare data successfully', async () => {
       // Mock fare API response
-      (fetch as jest.MockedFunction<typeof fetch>)
+      mockFetch
         .mockResolvedValueOnce({
           ok: true,
           json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
@@ -601,7 +602,7 @@ describe('Stage 6: search_trains Tool', () => {
 
     test('should handle missing fare data gracefully', async () => {
       // Mock fare API returning empty data
-      (fetch as jest.MockedFunction<typeof fetch>)
+      mockFetch
         .mockResolvedValueOnce({
           ok: true,
           json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
@@ -628,7 +629,7 @@ describe('Stage 6: search_trains Tool', () => {
 
     test('should handle fare API errors gracefully', async () => {
       // Mock fare API error
-      (fetch as jest.MockedFunction<typeof fetch>)
+      mockFetch
         .mockResolvedValueOnce({
           ok: true,
           json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
@@ -656,7 +657,7 @@ describe('Stage 6: search_trains Tool', () => {
 
     test('should include fare info in machine-readable data', async () => {
       // Mock fare API response
-      (fetch as jest.MockedFunction<typeof fetch>)
+      mockFetch
         .mockResolvedValueOnce({
           ok: true,
           json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
@@ -685,7 +686,7 @@ describe('Stage 6: search_trains Tool', () => {
 
   describe('Performance', () => {
     test('should handle multiple rapid requests', async () => {
-      (fetch as jest.MockedFunction<typeof fetch>)
+      mockFetch
         .mockResolvedValue({
           ok: true,
           json: async () => mockTrainData

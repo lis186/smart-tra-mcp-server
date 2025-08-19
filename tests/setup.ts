@@ -8,8 +8,15 @@ process.env.TDX_CLIENT_ID = 'test_client_id';
 process.env.TDX_CLIENT_SECRET = 'test_client_secret';
 process.env.NODE_ENV = 'test';
 
-// Mock fetch globally
-global.fetch = jest.fn();
+// Mock fetch globally with proper typing
+import { jest } from '@jest/globals';
+
+// Create a properly typed fetch mock
+const mockFetch = jest.fn() as jest.MockedFunction<typeof fetch>;
+global.fetch = mockFetch;
+
+// Export the typed mock for use in tests
+export { mockFetch };
 
 // Mock console methods to reduce noise in tests
 const originalError = console.error;
