@@ -153,7 +153,7 @@ describe('Stage 6: search_trains Tool', () => {
     mockFetch
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => mockStationData
+        json: async () => ({ Stations: mockStationData })
       } as Response);
 
     server = new SmartTRAServer();
@@ -431,7 +431,7 @@ describe('Stage 6: search_trains Tool', () => {
         } as Response)
         .mockResolvedValueOnce({
           ok: true,
-          json: async () => mockStationData
+          json: async () => ({ Stations: mockStationData })
         } as Response)
         .mockResolvedValueOnce({
           ok: true,
@@ -582,7 +582,7 @@ describe('Stage 6: search_trains Tool', () => {
         } as Response)
         .mockResolvedValueOnce({
           ok: true,
-          json: async () => mockStationData
+          json: async () => ({ Stations: mockStationData })
         } as Response)
         .mockResolvedValueOnce({
           ok: true,
@@ -609,7 +609,7 @@ describe('Stage 6: search_trains Tool', () => {
         } as Response)
         .mockResolvedValueOnce({
           ok: true,
-          json: async () => mockStationData
+          json: async () => ({ Stations: mockStationData })
         } as Response)
         .mockResolvedValueOnce({
           ok: true,
@@ -636,7 +636,7 @@ describe('Stage 6: search_trains Tool', () => {
         } as Response)
         .mockResolvedValueOnce({
           ok: true,
-          json: async () => mockStationData
+          json: async () => ({ Stations: mockStationData })
         } as Response)
         .mockResolvedValueOnce({
           ok: true,
@@ -664,7 +664,7 @@ describe('Stage 6: search_trains Tool', () => {
         } as Response)
         .mockResolvedValueOnce({
           ok: true,
-          json: async () => mockStationData
+          json: async () => ({ Stations: mockStationData })
         } as Response)
         .mockResolvedValueOnce({
           ok: true,

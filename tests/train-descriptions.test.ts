@@ -146,7 +146,7 @@ describe('Train Description Improvements (PR #15)', () => {
     mockFetch
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => mockStationData
+        json: async () => ({ Stations: mockStationData })
       } as Response);
 
     server = new SmartTRAServer();
