@@ -1581,7 +1581,7 @@ class SmartTRAServer {
       const token = await this.getAccessToken();
       const baseUrl = process.env.TDX_BASE_URL || 'https://tdx.transportdata.tw/api/basic';
       
-      const response = await this.fetchWithRetry(`${baseUrl}/v2/Rail/TRA/Station?%24format=JSON`, {
+      const response = await this.fetchWithRetry(`${baseUrl}/v3/Rail/TRA/Station?%24format=JSON`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Accept': 'application/json'
