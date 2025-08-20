@@ -858,7 +858,6 @@ class SmartTRAServer {
           'Accept': 'application/json'
         }
       });
-
       if (!response.ok) {
         // Handle common API failure scenarios
         if (response.status === HTTP_CONSTANTS.NOT_FOUND) {
