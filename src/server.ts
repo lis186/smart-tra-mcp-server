@@ -500,7 +500,7 @@ class SmartTRAServer {
 
     this.setupHandlers();
     this.setupGracefulShutdown();
-    this.loadStationData();
+    // Station data will be loaded after connection is established in start() method
   }
 
   private setupHandlers() {
@@ -1779,6 +1779,11 @@ class SmartTRAServer {
         undefined;
       // Ensure station data is loaded
       if (!this.stationDataLoaded) {
+        // Reset failure state if enough time has passed for a retry
+        const now = Date.now();
+        if (this.stationLoadFailed && (now - this.lastStationLoadAttempt) >= 300000) {
+          this.stationLoadFailed = false;
+        }
         await this.loadStationData();
       }
 
@@ -2009,6 +2014,11 @@ class SmartTRAServer {
 
       // Ensure station data is loaded
       if (!this.stationDataLoaded) {
+        // Reset failure state if enough time has passed for a retry
+        const now = Date.now();
+        if (this.stationLoadFailed && (now - this.lastStationLoadAttempt) >= 300000) {
+          this.stationLoadFailed = false;
+        }
         await this.loadStationData();
       }
 
@@ -3028,6 +3038,11 @@ class SmartTRAServer {
     await this.server.connect(transport);
     this.isConnected = true;
     console.error('Smart TRA MCP Server started successfully');
+    
+    // Load station data now that connection is established
+    if (!this.stationDataLoaded && !this.stationLoadFailed) {
+      await this.loadStationData();
+    }
   }
 
   // Health check method for future use
