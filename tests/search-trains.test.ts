@@ -36,24 +36,24 @@ const mockTrainData = [
         StopSequence: 1,
         StationID: '1000',
         StationName: { Zh_tw: '臺北', En: 'Taipei' },
-        ArrivalTime: '08:00:00',
-        DepartureTime: '08:00:00',
+        ArrivalTime: '15:00:00',
+        DepartureTime: '15:00:00',
         SuspendedFlag: 0
       },
       {
         StopSequence: 2,
         StationID: '1100',
         StationName: { Zh_tw: '桃園', En: 'Taoyuan' },
-        ArrivalTime: '08:30:00',
-        DepartureTime: '08:32:00',
+        ArrivalTime: '15:30:00',
+        DepartureTime: '15:32:00',
         SuspendedFlag: 0
       },
       {
         StopSequence: 3,
         StationID: '3300',
         StationName: { Zh_tw: '臺中', En: 'Taichung' },
-        ArrivalTime: '10:15:00',
-        DepartureTime: '10:15:00',
+        ArrivalTime: '17:15:00',
+        DepartureTime: '17:15:00',
         SuspendedFlag: 0
       }
     ]
@@ -86,16 +86,16 @@ const mockTrainData = [
         StopSequence: 1,
         StationID: '1000',
         StationName: { Zh_tw: '臺北', En: 'Taipei' },
-        ArrivalTime: '09:00:00',
-        DepartureTime: '09:00:00',
+        ArrivalTime: '16:00:00',
+        DepartureTime: '16:00:00',
         SuspendedFlag: 0
       },
       {
         StopSequence: 2,
         StationID: '3300',
         StationName: { Zh_tw: '臺中', En: 'Taichung' },
-        ArrivalTime: '10:30:00',
-        DepartureTime: '10:30:00',
+        ArrivalTime: '18:30:00',
+        DepartureTime: '18:30:00',
         SuspendedFlag: 0
       }
     ]
@@ -238,11 +238,11 @@ describe('Stage 6: search_trains Tool', () => {
       
       expect(result.content[0].text).toContain('🚄 **Train Search Results**');
       expect(result.content[0].text).toContain('Route:** 臺北 → 臺中');
-      expect(result.content[0].text).toContain('Found:** 1 trains (2 total)');
+      expect(result.content[0].text).toContain('Found:** 2 trains (2 total)');
     });
 
     test('should calculate travel time correctly', () => {
-      const travelTime = server['calculateTravelTime']('08:00:00', '10:15:00');
+      const travelTime = server['calculateTravelTime']('15:00:00', '17:15:00');
       expect(travelTime).toBe('2小時15分');
     });
 
@@ -329,7 +329,12 @@ describe('Stage 6: search_trains Tool', () => {
       mockFetch
         .mockResolvedValue({
           ok: true,
-          json: async () => mockTrainData
+          json: async () => ({
+            UpdateTime: '2025-08-20T15:00:00',
+            UpdateInterval: 300,
+            TrainDate: '2025-08-20',
+            TrainTimetables: mockTrainData
+          })
         } as Response);
     });
 
@@ -566,15 +571,7 @@ describe('Stage 6: search_trains Tool', () => {
 
   describe('Fare Integration', () => {
     beforeEach(() => {
-      mockFetch
-        .mockResolvedValue({
-          ok: true,
-          json: async () => mockTrainData
-        } as Response);
-    });
-
-    test('should fetch fare data successfully', async () => {
-      // Mock fare API response
+      // Default sequence: Auth token -> Station data -> Train dates -> Train timetable -> Live data -> Fare data
       mockFetch
         .mockResolvedValueOnce({
           ok: true,
@@ -586,12 +583,34 @@ describe('Stage 6: search_trains Tool', () => {
         } as Response)
         .mockResolvedValueOnce({
           ok: true,
-          json: async () => mockTrainData
+          json: async () => ({
+            TrainDates: ['2025-08-20', '2025-08-21', '2025-08-22'],
+            StartDate: '2025-08-20',
+            EndDate: '2025-08-22',
+            Count: 3
+          })
         } as Response)
         .mockResolvedValueOnce({
           ok: true,
-          json: async () => mockFareData
+          json: async () => ({
+            UpdateTime: '2025-08-20T15:00:00',
+            UpdateInterval: 300,
+            TrainDate: '2025-08-20',
+            TrainTimetables: mockTrainData
+          })
+        } as Response)
+        .mockResolvedValue({
+          ok: true,
+          json: async () => []
         } as Response);
+    });
+
+    test('should fetch fare data successfully', async () => {
+      // Override only the fare API response
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockFareData
+      } as Response);
 
       const result = await server['handleSearchTrains']('台北到台中');
       
@@ -601,7 +620,8 @@ describe('Stage 6: search_trains Tool', () => {
     });
 
     test('should handle missing fare data gracefully', async () => {
-      // Mock fare API returning empty data
+      // Reset and setup full mock sequence for this test
+      mockFetch.mockReset();
       mockFetch
         .mockResolvedValueOnce({
           ok: true,
@@ -613,7 +633,25 @@ describe('Stage 6: search_trains Tool', () => {
         } as Response)
         .mockResolvedValueOnce({
           ok: true,
-          json: async () => mockTrainData
+          json: async () => ({
+            TrainDates: ['2025-08-20', '2025-08-21', '2025-08-22'],
+            StartDate: '2025-08-20',
+            EndDate: '2025-08-22',
+            Count: 3
+          })
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            UpdateTime: '2025-08-20T15:00:00',
+            UpdateInterval: 300,
+            TrainDate: '2025-08-20',
+            TrainTimetables: mockTrainData
+          })
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => []
         } as Response)
         .mockResolvedValueOnce({
           ok: true,
@@ -628,25 +666,12 @@ describe('Stage 6: search_trains Tool', () => {
     });
 
     test('should handle fare API errors gracefully', async () => {
-      // Mock fare API error
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ Stations: mockStationData })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockTrainData
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: false,
-          status: 404,
-          statusText: 'Not Found'
-        } as Response);
+      // Override only the fare API response to simulate error
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        statusText: 'Not Found'
+      } as Response);
 
       const result = await server['handleSearchTrains']('台北到台中');
       
@@ -656,24 +681,11 @@ describe('Stage 6: search_trains Tool', () => {
     });
 
     test('should include fare info in machine-readable data', async () => {
-      // Mock fare API response
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ Stations: mockStationData })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockTrainData
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockFareData
-        } as Response);
+      // Override only the fare API response
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockFareData
+      } as Response);
 
       const result = await server['handleSearchTrains']('台北到台中');
       
@@ -689,7 +701,12 @@ describe('Stage 6: search_trains Tool', () => {
       mockFetch
         .mockResolvedValue({
           ok: true,
-          json: async () => mockTrainData
+          json: async () => ({
+            UpdateTime: '2025-08-20T15:00:00',
+            UpdateInterval: 300,
+            TrainDate: '2025-08-20',
+            TrainTimetables: mockTrainData
+          })
         } as Response);
 
       const promises = Array.from({ length: 5 }, () => 

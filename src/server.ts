@@ -1668,6 +1668,14 @@ class SmartTRAServer {
       ['高雄', '高雄'],
       ['板橋', '板橋'],
       ['桃園', '桃園'],
+      // Handle common "station" suffix variations
+      ['台北車站', '臺北'],
+      ['台中車站', '臺中'],
+      ['台南車站', '臺南'],
+      ['高雄車站', '高雄'],
+      ['臺北車站', '臺北'],
+      ['臺中車站', '臺中'],
+      ['臺南車站', '臺南'],
     ]);
 
     const expandedQuery = aliases.get(normalizedQuery) || normalizedQuery;
@@ -1772,8 +1780,8 @@ class SmartTRAServer {
   // Handle search_station tool request
   private async handleSearchStation(query: string, context?: string): Promise<any> {
     try {
-      // Validate inputs
-      const validatedQuery = this.validateApiInput(query, 'query', this.MAX_QUERY_LENGTH);
+      // Validate inputs - but allow empty queries to be handled by search logic
+      const validatedQuery = query.trim() ? this.validateApiInput(query, 'query', this.MAX_QUERY_LENGTH) : '';
       const validatedContext = context ? 
         this.validateApiInput(context, 'context', this.MAX_CONTEXT_LENGTH) : 
         undefined;
@@ -1865,10 +1873,19 @@ class SmartTRAServer {
 
     } catch (error) {
       this.logError('Error in handleSearchStation', error, { query, context });
+      
+      // Check if this is a validation error vs a search error
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const isValidationError = errorMessage.includes('must be a string') || 
+                               errorMessage.includes('cannot be empty') || 
+                               errorMessage.includes('exceeds maximum length');
+      
       return {
         content: [{
           type: 'text',
-          text: `❌ Unable to search stations. Please try again or check your query format.`
+          text: isValidationError 
+            ? `❌ Unable to search stations. Please try again or check your query format.`
+            : `❌ Error searching stations. Please try again or contact support if the issue persists.`
         }]
       };
     }

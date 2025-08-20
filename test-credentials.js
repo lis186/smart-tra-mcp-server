@@ -69,7 +69,7 @@ try {
   // 測試基本 API 呼叫
   console.log('\n🚄 測試車站資料 API...');
   const baseUrl = process.env.TDX_BASE_URL || 'https://tdx.transportdata.tw/api/basic';
-  const stationResponse = await fetch(`${baseUrl}/v2/Rail/TRA/Station?%24format=JSON&%24top=1`, {
+  const stationResponse = await fetch(`${baseUrl}/v3/Rail/TRA/Station?%24format=JSON&%24top=1`, {
     headers: {
       'Authorization': `Bearer ${tokenData.access_token}`,
       'Accept': 'application/json'

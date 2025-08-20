@@ -107,7 +107,7 @@ export async function getTDXToken(clientId: string, clientSecret: string): Promi
  * Call TRA station list endpoint as validation
  */
 export async function testTDXApiCall(token: string): Promise<any> {
-  const endpoint = '/v2/Rail/TRA/Station';
+  const endpoint = '/v3/Rail/TRA/Station';
   const url = `${TDX_BASE_URL}${endpoint}?$top=5`;
   
   console.error(`[TDX API] Testing API connectivity with station endpoint`);
