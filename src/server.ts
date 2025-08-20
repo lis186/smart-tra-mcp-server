@@ -1596,7 +1596,9 @@ class SmartTRAServer {
         throw new Error('Unable to load station information. Service may be temporarily unavailable.');
       }
 
-      this.stationData = await response.json() as TRAStation[];
+      const responseData = await response.json() as any;
+      // v3 API wraps stations in a response object with Stations property
+      this.stationData = responseData.Stations || responseData;
       this.buildSearchIndexes();
       this.stationDataLoaded = true;
       this.stationLoadFailed = false;
