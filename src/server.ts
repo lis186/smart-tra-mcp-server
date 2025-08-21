@@ -1163,7 +1163,8 @@ class SmartTRAServer {
         return liveDataMap;
       }
 
-      const liveData = await response.json() as TDXLiveBoardEntry[];
+      const responseData = await response.json() as any;
+      const liveData = responseData.TrainLiveBoards || responseData; // Handle both v3 wrapper and direct array
       
       if (!Array.isArray(liveData) || liveData.length === 0) {
         console.error(`No live trains found for station ${stationId} - trains may not be running`);

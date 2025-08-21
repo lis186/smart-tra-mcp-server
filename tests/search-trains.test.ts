@@ -572,7 +572,7 @@ describe('Stage 6: search_trains Tool', () => {
     });
 
     test('should include machine-readable JSON data', async () => {
-      const result = await server['handleSearchTrains']('台北到台中');
+      const result = await server['handleSearchTrains']('台北到台中 with JSON data');
       
       expect(result.content[0].text).toContain('Machine-readable data:');
       expect(result.content[0].text).toContain('```json');
@@ -591,12 +591,40 @@ describe('Stage 6: search_trains Tool', () => {
     });
 
     test('should handle no trains found scenario', async () => {
-      // Mock empty response
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => []
-        } as Response);
+      // Override the mock to return empty timetable data
+      mockFetch.mockReset();
+      mockFetch.mockImplementation(async (input: string | URL | Request) => {
+        const urlString = typeof input === 'string' ? input : input.toString();
+        if (urlString.includes('TrainDates')) {
+          return {
+            ok: true,
+            json: async () => ({
+              UpdateTime: '2025-08-14T15:00:00',
+              UpdateInterval: 300,
+              AuthorityCode: 'TRA',
+              StartDate: '2025-08-14',
+              EndDate: '2025-08-20',
+              TrainDates: ['2025-08-14', '2025-08-15', '2025-08-16'],
+              Count: 3
+            })
+          } as Response;
+        } else if (urlString.includes('DailyTrainTimetable')) {
+          return {
+            ok: true,
+            json: async () => ({
+              UpdateTime: '2025-08-14T15:00:00',
+              UpdateInterval: 300,
+              TrainDate: '2025-08-14',
+              TrainTimetables: [] // Empty timetables = no trains found
+            })
+          } as Response;
+        } else {
+          return {
+            ok: true,
+            json: async () => []
+          } as Response;
+        }
+      });
 
       const result = await server['handleSearchTrains']('台北到台中');
       
@@ -747,92 +775,48 @@ describe('Stage 6: search_trains Tool', () => {
 
   describe('Fare Integration', () => {
     beforeEach(() => {
-      // Default sequence: Auth token -> Station data -> Train dates -> Train timetable -> Live data -> Fare data
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ Stations: mockStationData })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            TrainDates: ['2025-08-20', '2025-08-21', '2025-08-22'],
-            StartDate: '2025-08-20',
-            EndDate: '2025-08-22',
-            Count: 3
-          })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            UpdateTime: '2025-08-20T15:00:00',
-            UpdateInterval: 300,
-            TrainDate: '2025-08-20',
-            TrainTimetables: mockTrainData
-          })
-        } as Response)
-        .mockResolvedValue({
-          ok: true,
-          json: async () => []
-        } as Response);
+      // Reset mock to ensure clean state
+      mockFetch.mockReset();
+      
+      // Set up mock implementation that handles all calls
+      mockFetch.mockImplementation(async (input: string | URL | Request) => {
+        const urlString = typeof input === 'string' ? input : input.toString();
+        if (urlString.includes('TrainDates')) {
+          return {
+            ok: true,
+            json: async () => ({
+              TrainDates: ['2025-08-20', '2025-08-21', '2025-08-22'],
+              StartDate: '2025-08-20',
+              EndDate: '2025-08-22',
+              Count: 3
+            })
+          } as Response;
+        } else if (urlString.includes('DailyTrainTimetable')) {
+          return {
+            ok: true,
+            json: async () => ({
+              UpdateTime: '2025-08-20T15:00:00',
+              UpdateInterval: 300,
+              TrainDate: '2025-08-20',
+              TrainTimetables: mockTrainData
+            })
+          } as Response;
+        } else if (urlString.includes('ODFare')) {
+          return {
+            ok: true,
+            json: async () => mockFareData
+          } as Response;
+        } else {
+          // Live data and other APIs
+          return {
+            ok: true,
+            json: async () => []
+          } as Response;
+        }
+      });
     });
 
     test('should fetch fare data successfully', async () => {
-      // Reset and mock complete sequence
-      mockFetch.mockReset();
-      server = new SmartTRAServer();
-      server.resetRateLimitingForTest();
-      await server.loadStationDataForTest(mockStationData);
-      
-      mockFetch
-        // Token API
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          json: async () => ({
-            access_token: 'mock_token',
-            token_type: 'Bearer', 
-            expires_in: 86400
-          })
-        } as Response)
-        // Date range API
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          json: async () => ({
-            TrainDates: ['2025-08-20'],
-            StartDate: '2025-08-20',
-            EndDate: '2025-08-20',
-            Count: 1
-          })
-        } as Response)
-        // Timetable API
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          json: async () => ({
-            UpdateTime: '2025-08-20T15:00:00',
-            TrainDate: '2025-08-20',
-            TrainTimetables: createMockTrainData()
-          })
-        } as Response)
-        // Fare API
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          json: async () => mockFareData
-        } as Response)
-        // Live data API
-        .mockResolvedValue({
-          ok: true,
-          status: 200,
-          json: async () => []
-        } as Response);
-
       const result = await server['handleSearchTrains']('台北到台中 所有時間');
       
       expect(result.content[0].text).toContain('**票價資訊:**');
@@ -841,43 +825,42 @@ describe('Stage 6: search_trains Tool', () => {
     });
 
     test('should handle missing fare data gracefully', async () => {
-      // Reset and setup full mock sequence for this test
+      // Override just the fare API to return empty data
       mockFetch.mockReset();
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ access_token: 'mock_token', token_type: 'Bearer', expires_in: 86400 })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ Stations: mockStationData })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            TrainDates: ['2025-08-20', '2025-08-21', '2025-08-22'],
-            StartDate: '2025-08-20',
-            EndDate: '2025-08-22',
-            Count: 3
-          })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            UpdateTime: '2025-08-20T15:00:00',
-            UpdateInterval: 300,
-            TrainDate: '2025-08-20',
-            TrainTimetables: mockTrainData
-          })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => []
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => []
-        } as Response);
+      mockFetch.mockImplementation(async (input: string | URL | Request) => {
+        const urlString = typeof input === 'string' ? input : input.toString();
+        if (urlString.includes('TrainDates')) {
+          return {
+            ok: true,
+            json: async () => ({
+              TrainDates: ['2025-08-20', '2025-08-21', '2025-08-22'],
+              StartDate: '2025-08-20',
+              EndDate: '2025-08-22',
+              Count: 3
+            })
+          } as Response;
+        } else if (urlString.includes('DailyTrainTimetable')) {
+          return {
+            ok: true,
+            json: async () => ({
+              UpdateTime: '2025-08-20T15:00:00',
+              UpdateInterval: 300,
+              TrainDate: '2025-08-20',
+              TrainTimetables: mockTrainData
+            })
+          } as Response;
+        } else if (urlString.includes('ODFare')) {
+          return {
+            ok: true,
+            json: async () => [] // No fare data
+          } as Response;
+        } else {
+          return {
+            ok: true,
+            json: async () => []
+          } as Response;
+        }
+      });
 
       const result = await server['handleSearchTrains']('台北到台中');
       
@@ -887,31 +870,43 @@ describe('Stage 6: search_trains Tool', () => {
     });
 
     test('should handle fare API errors gracefully', async () => {
-      // Mock successful date range + timetable, but failing fare API
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            TrainDates: ['2025-08-20', '2025-08-21', '2025-08-22'],
-            StartDate: '2025-08-20',
-            EndDate: '2025-08-22',
-            Count: 3
-          })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            UpdateTime: '2025-08-20T15:00:00',
-            UpdateInterval: 300,
-            TrainDate: '2025-08-20',
-            TrainTimetables: mockTrainData
-          })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: false,
-          status: 404,
-          statusText: 'Not Found'
-        } as Response);
+      // Override just the fare API to return an error
+      mockFetch.mockReset();
+      mockFetch.mockImplementation(async (input: string | URL | Request) => {
+        const urlString = typeof input === 'string' ? input : input.toString();
+        if (urlString.includes('TrainDates')) {
+          return {
+            ok: true,
+            json: async () => ({
+              TrainDates: ['2025-08-20', '2025-08-21', '2025-08-22'],
+              StartDate: '2025-08-20',
+              EndDate: '2025-08-22',
+              Count: 3
+            })
+          } as Response;
+        } else if (urlString.includes('DailyTrainTimetable')) {
+          return {
+            ok: true,
+            json: async () => ({
+              UpdateTime: '2025-08-20T15:00:00',
+              UpdateInterval: 300,
+              TrainDate: '2025-08-20',
+              TrainTimetables: mockTrainData
+            })
+          } as Response;
+        } else if (urlString.includes('ODFare')) {
+          return {
+            ok: false,
+            status: 404,
+            statusText: 'Not Found'
+          } as Response;
+        } else {
+          return {
+            ok: true,
+            json: async () => []
+          } as Response;
+        }
+      });
 
       const result = await server['handleSearchTrains']('台北到台中');
       
@@ -921,32 +916,7 @@ describe('Stage 6: search_trains Tool', () => {
     });
 
     test('should include fare info in machine-readable data', async () => {
-      // Mock the complete sequence: date range + timetable + fare
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            TrainDates: ['2025-08-20', '2025-08-21', '2025-08-22'],
-            StartDate: '2025-08-20',
-            EndDate: '2025-08-22',
-            Count: 3
-          })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            UpdateTime: '2025-08-20T15:00:00',
-            UpdateInterval: 300,
-            TrainDate: '2025-08-20',
-            TrainTimetables: mockTrainData
-          })
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockFareData
-        } as Response);
-
-      const result = await server['handleSearchTrains']('台北到台中');
+      const result = await server['handleSearchTrains']('台北到台中 with structured data');
       
       expect(result.content[0].text).toContain('Machine-readable data:');
       expect(result.content[0].text).toContain('"fareInfo"');
