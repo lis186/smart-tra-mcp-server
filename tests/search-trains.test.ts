@@ -351,36 +351,56 @@ describe('Stage 6: search_trains Tool', () => {
       // Mock current time to be 07:00 AM local time for consistent testing
       jest.spyOn(Date, 'now').mockReturnValue(new Date('2025-08-13T07:00:00+08:00').getTime());
       
+      // Reset mock to ensure clean state
+      mockFetch.mockReset();
+      
+      // Set up repeatable mocks for all tests in this section
       mockFetch
-        // Date range API (first call)
-        .mockResolvedValueOnce({
+        // Date range API (repeatable for all tests)
+        .mockResolvedValue({
           ok: true,
           json: async () => ({
             StartDate: '2025-08-01',
             EndDate: '2025-08-31',
             TrainDates: ['2025-08-13', '2025-08-14', '2025-08-15', '2025-08-20', '2025-08-21']
           })
-        } as Response)
-        // Timetable API (second call)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            UpdateTime: '2025-08-14T15:00:00',
-            UpdateInterval: 300,
-            TrainDate: '2025-08-13',
-            TrainTimetables: mockTrainData
-          })
-        } as Response)
-        // Fare API (third call)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockFareData
-        } as Response)
-        // Live data API (fourth call)
-        .mockResolvedValue({
-          ok: true,
-          json: async () => []
         } as Response);
+      
+      // For each test, we need a fresh sequence, so set up the implementation
+      mockFetch.mockImplementation(async (input: string | URL | Request) => {
+        const urlString = typeof input === 'string' ? input : input.toString();
+        if (urlString.includes('TrainDates')) {
+          return {
+            ok: true,
+            json: async () => ({
+              StartDate: '2025-08-01',
+              EndDate: '2025-08-31',
+              TrainDates: ['2025-08-13', '2025-08-14', '2025-08-15', '2025-08-20', '2025-08-21']
+            })
+          } as Response;
+        } else if (urlString.includes('DailyTrainTimetable')) {
+          return {
+            ok: true,
+            json: async () => ({
+              UpdateTime: '2025-08-14T15:00:00',
+              UpdateInterval: 300,
+              TrainDate: '2025-08-13',
+              TrainTimetables: mockTrainData
+            })
+          } as Response;
+        } else if (urlString.includes('ODFare')) {
+          return {
+            ok: true,
+            json: async () => mockFareData
+          } as Response;
+        } else {
+          // Live data and other APIs
+          return {
+            ok: true,
+            json: async () => []
+          } as Response;
+        }
+      });
     });
 
     afterEach(() => {
@@ -435,36 +455,44 @@ describe('Stage 6: search_trains Tool', () => {
 
   describe('Query Processing Integration', () => {
     beforeEach(() => {
-      mockFetch
-        // Date range API (first call)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            StartDate: '2025-08-01',
-            EndDate: '2025-08-31',
-            TrainDates: ['2025-08-13', '2025-08-14', '2025-08-15', '2025-08-20', '2025-08-21']
-          })
-        } as Response)
-        // Timetable API (second call)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            UpdateTime: '2025-08-20T15:00:00',
-            UpdateInterval: 300,
-            TrainDate: '2025-08-20',
-            TrainTimetables: mockTrainData
-          })
-        } as Response)
-        // Fare API (third call)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockFareData
-        } as Response)
-        // Live data API (fourth call)
-        .mockResolvedValue({
-          ok: true,
-          json: async () => []
-        } as Response);
+      // Reset mock to ensure clean state
+      mockFetch.mockReset();
+      
+      // Set up mock implementation that handles all calls
+      mockFetch.mockImplementation(async (input: string | URL | Request) => {
+        const urlString = typeof input === 'string' ? input : input.toString();
+        if (urlString.includes('TrainDates')) {
+          return {
+            ok: true,
+            json: async () => ({
+              StartDate: '2025-08-01',
+              EndDate: '2025-08-31',
+              TrainDates: ['2025-08-13', '2025-08-14', '2025-08-15', '2025-08-20', '2025-08-21']
+            })
+          } as Response;
+        } else if (urlString.includes('DailyTrainTimetable')) {
+          return {
+            ok: true,
+            json: async () => ({
+              UpdateTime: '2025-08-20T15:00:00',
+              UpdateInterval: 300,
+              TrainDate: '2025-08-20',
+              TrainTimetables: mockTrainData
+            })
+          } as Response;
+        } else if (urlString.includes('ODFare')) {
+          return {
+            ok: true,
+            json: async () => mockFareData
+          } as Response;
+        } else {
+          // Live data and other APIs
+          return {
+            ok: true,
+            json: async () => []
+          } as Response;
+        }
+      });
     });
 
     test('should handle natural language queries', async () => {
@@ -495,29 +523,48 @@ describe('Stage 6: search_trains Tool', () => {
       // Mock current time to be 07:00 AM for time window testing
       jest.spyOn(Date, 'now').mockReturnValue(new Date('2025-08-14T07:00:00').getTime());
       
-      // Mock the date range response first, then train data
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            UpdateTime: '2025-08-14T15:00:00',
-            UpdateInterval: 300,
-            AuthorityCode: 'TRA',
-            StartDate: '2025-08-14',
-            EndDate: '2025-08-20',
-            TrainDates: ['2025-08-14', '2025-08-15', '2025-08-16'],
-            Count: 3
-          })
-        } as Response)
-        .mockResolvedValue({
-          ok: true,
-          json: async () => ({
-            UpdateTime: '2025-08-14T15:00:00',
-            UpdateInterval: 300,
-            TrainDate: '2025-08-14',
-            TrainTimetables: mockTrainData
-          })
-        } as Response);
+      // Reset mock to ensure clean state
+      mockFetch.mockReset();
+      
+      // Set up mock implementation that handles all calls
+      mockFetch.mockImplementation(async (input: string | URL | Request) => {
+        const urlString = typeof input === 'string' ? input : input.toString();
+        if (urlString.includes('TrainDates')) {
+          return {
+            ok: true,
+            json: async () => ({
+              UpdateTime: '2025-08-14T15:00:00',
+              UpdateInterval: 300,
+              AuthorityCode: 'TRA',
+              StartDate: '2025-08-14',
+              EndDate: '2025-08-20',
+              TrainDates: ['2025-08-14', '2025-08-15', '2025-08-16'],
+              Count: 3
+            })
+          } as Response;
+        } else if (urlString.includes('DailyTrainTimetable')) {
+          return {
+            ok: true,
+            json: async () => ({
+              UpdateTime: '2025-08-14T15:00:00',
+              UpdateInterval: 300,
+              TrainDate: '2025-08-14',
+              TrainTimetables: mockTrainData
+            })
+          } as Response;
+        } else if (urlString.includes('ODFare')) {
+          return {
+            ok: true,
+            json: async () => mockFareData
+          } as Response;
+        } else {
+          // Live data and other APIs
+          return {
+            ok: true,
+            json: async () => []
+          } as Response;
+        }
+      });
     });
     
     afterEach(() => {
