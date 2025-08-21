@@ -500,7 +500,7 @@ class SmartTRAServer {
 
     this.setupHandlers();
     this.setupGracefulShutdown();
-    this.loadStationData();
+    // Station data will be loaded after connection is established in start() method
   }
 
   private setupHandlers() {
@@ -858,7 +858,6 @@ class SmartTRAServer {
           'Accept': 'application/json'
         }
       });
-
       if (!response.ok) {
         // Handle common API failure scenarios
         if (response.status === HTTP_CONSTANTS.NOT_FOUND) {
@@ -1164,7 +1163,8 @@ class SmartTRAServer {
         return liveDataMap;
       }
 
-      const liveData = await response.json() as TDXLiveBoardEntry[];
+      const responseData = await response.json() as any;
+      const liveData = responseData.TrainLiveBoards || responseData; // Handle both v3 wrapper and direct array
       
       if (!Array.isArray(liveData) || liveData.length === 0) {
         console.error(`No live trains found for station ${stationId} - trains may not be running`);
@@ -1581,7 +1581,7 @@ class SmartTRAServer {
       const token = await this.getAccessToken();
       const baseUrl = process.env.TDX_BASE_URL || 'https://tdx.transportdata.tw/api/basic';
       
-      const response = await this.fetchWithRetry(`${baseUrl}/v2/Rail/TRA/Station?%24format=JSON`, {
+      const response = await this.fetchWithRetry(`${baseUrl}/v3/Rail/TRA/Station?%24format=JSON`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Accept': 'application/json'
@@ -1596,7 +1596,9 @@ class SmartTRAServer {
         throw new Error('Unable to load station information. Service may be temporarily unavailable.');
       }
 
-      this.stationData = await response.json() as TRAStation[];
+      const responseData = await response.json() as any;
+      // v3 API wraps stations in a response object with Stations property
+      this.stationData = responseData.Stations || responseData;
       this.buildSearchIndexes();
       this.stationDataLoaded = true;
       this.stationLoadFailed = false;
@@ -1666,6 +1668,14 @@ class SmartTRAServer {
       ['高雄', '高雄'],
       ['板橋', '板橋'],
       ['桃園', '桃園'],
+      // Handle common "station" suffix variations
+      ['台北車站', '臺北'],
+      ['台中車站', '臺中'],
+      ['台南車站', '臺南'],
+      ['高雄車站', '高雄'],
+      ['臺北車站', '臺北'],
+      ['臺中車站', '臺中'],
+      ['臺南車站', '臺南'],
     ]);
 
     const expandedQuery = aliases.get(normalizedQuery) || normalizedQuery;
@@ -1770,13 +1780,18 @@ class SmartTRAServer {
   // Handle search_station tool request
   private async handleSearchStation(query: string, context?: string): Promise<any> {
     try {
-      // Validate inputs
-      const validatedQuery = this.validateApiInput(query, 'query', this.MAX_QUERY_LENGTH);
+      // Validate inputs - but allow empty queries to be handled by search logic
+      const validatedQuery = query.trim() ? this.validateApiInput(query, 'query', this.MAX_QUERY_LENGTH) : '';
       const validatedContext = context ? 
         this.validateApiInput(context, 'context', this.MAX_CONTEXT_LENGTH) : 
         undefined;
       // Ensure station data is loaded
       if (!this.stationDataLoaded) {
+        // Reset failure state if enough time has passed for a retry
+        const now = Date.now();
+        if (this.stationLoadFailed && (now - this.lastStationLoadAttempt) >= 300000) {
+          this.stationLoadFailed = false;
+        }
         await this.loadStationData();
       }
 
@@ -1858,10 +1873,19 @@ class SmartTRAServer {
 
     } catch (error) {
       this.logError('Error in handleSearchStation', error, { query, context });
+      
+      // Check if this is a validation error vs a search error
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const isValidationError = errorMessage.includes('must be a string') || 
+                               errorMessage.includes('cannot be empty') || 
+                               errorMessage.includes('exceeds maximum length');
+      
       return {
         content: [{
           type: 'text',
-          text: `❌ Unable to search stations. Please try again or check your query format.`
+          text: isValidationError 
+            ? `❌ Unable to search stations. Please try again or check your query format.`
+            : `❌ Error searching stations. Please try again or contact support if the issue persists.`
         }]
       };
     }
@@ -2007,6 +2031,11 @@ class SmartTRAServer {
 
       // Ensure station data is loaded
       if (!this.stationDataLoaded) {
+        // Reset failure state if enough time has passed for a retry
+        const now = Date.now();
+        if (this.stationLoadFailed && (now - this.lastStationLoadAttempt) >= 300000) {
+          this.stationLoadFailed = false;
+        }
         await this.loadStationData();
       }
 
@@ -3026,6 +3055,11 @@ class SmartTRAServer {
     await this.server.connect(transport);
     this.isConnected = true;
     console.error('Smart TRA MCP Server started successfully');
+    
+    // Load station data now that connection is established
+    if (!this.stationDataLoaded && !this.stationLoadFailed) {
+      await this.loadStationData();
+    }
   }
 
   // Health check method for future use

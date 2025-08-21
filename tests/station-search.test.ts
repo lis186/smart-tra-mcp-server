@@ -64,7 +64,7 @@ describe('Station Search Performance and Accuracy', () => {
     mockFetch
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => mockStationData
+        json: async () => ({ Stations: mockStationData })
       } as Response);
 
     server = new SmartTRAServer();
