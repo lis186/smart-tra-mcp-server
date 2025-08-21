@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-Smart TRA MCP Server - An intelligent Taiwan Railway Administration (TRA) query server following the Model Context Protocol (MCP) design philosophy. This project integrates TDX (Transport Data eXchange) Taiwan railway APIs through natural language interfaces, providing train schedules, real-time information, fare queries, and trip planning.
+Smart TRA MCP Server - An intelligent Taiwan Railway Administration (TRA) query server following the Model Context Protocol (MCP) design philosophy. This project integrates TDX (Transport Data eXchange) Taiwan railway v3 APIs through natural language interfaces, providing train schedules, real-time information, fare queries, and trip planning.
 
 **Project Status**: Active Development - Stage 6 Complete + Advanced Features
 
@@ -65,7 +65,7 @@ Following the Shopify Storefront MCP design philosophy:
 - **MCP SDK**: @modelcontextprotocol/sdk
 - **Transport**: Dual support - STDIO (Claude Desktop) + Streamable HTTP (web/n8n)
 - **AI Parser**: Google Gemini 2.5 Flash-Lite for natural language understanding
-- **APIs**: TDX Taiwan Railway APIs (OAuth 2.0 authentication)
+- **APIs**: TDX Taiwan Railway v3 APIs (OAuth 2.0 authentication)
 
 ### Reference Implementations
 
@@ -314,12 +314,13 @@ Based on `prd.md` and `spec.md`:
 
 ## Key Technical Considerations
 
-### TDX API Integration
+### TDX v3 API Integration
 
 - OAuth 2.0 client credentials flow
 - Token caching (24-hour expiration)
 - Rate limiting: 50 requests/second, 60 parallel connections per IP
 - OData v4 query support for filtering and pagination
+- v3 API endpoints with wrapped response format (TrainTimetables property)
 
 ### Error Handling Strategy
 
@@ -369,10 +370,11 @@ smart-tra-mcp-server/
 7. ✅ **Stage 8**: Response size optimization - 60-85% reduction
 8. ✅ **Advanced Features**: 
    - Train number direct queries with smart completion
-   - Real timetable integration (TDX SpecificTrainTimetable/DailyTrainTimetable APIs)
-   - Live status integration (TrainLiveBoard API)
+   - Real timetable integration (TDX v3 SpecificTrainTimetable/DailyTrainTimetable APIs)
+   - Live status integration (v3 TrainLiveBoard API)
    - Enhanced visual design (🟢🟡🔴 traffic lights, 🚈🚏➡️ transit icons)
    - **Delay time adjustment** - automatic calculation of adjusted times based on delays
+9. ✅ **TDX v3 API Upgrade**: Complete migration from v2 to v3 API endpoints with proper response parsing
 
 ## Next Steps
 
