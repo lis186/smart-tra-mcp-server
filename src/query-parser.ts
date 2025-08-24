@@ -20,6 +20,8 @@ export interface ParsedQuery {
     directOnly?: boolean;
     trainType?: string;
     timeWindowHours?: number;
+    scenic?: boolean;
+    allowTransfers?: boolean;
   };
   confidence: number;
   rawQuery: string;
