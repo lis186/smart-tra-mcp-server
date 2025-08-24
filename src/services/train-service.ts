@@ -6,6 +6,8 @@
 import { AuthManager } from '../core/auth-manager.js';
 import { ErrorHandler } from '../core/error-handler.js';
 import { TimeUtils } from '../utils/time-utils.js';
+import { TDXFareResponse } from '../types/tdx.types.js';
+import { TrainSearchResult, FareInfo } from '../types/common.types.js';
 
 // TDX API interfaces
 export interface TRATrainTimetable {
@@ -31,25 +33,6 @@ export interface TDXDateRangeResponse {
 
 export interface TDXTrainTimetableResponse {
   TrainTimetables: TRATrainTimetable[];
-}
-
-export interface TrainSearchResult {
-  trainNo: string;
-  trainType: string;
-  origin: string;
-  destination: string;
-  departureTime: string;
-  arrivalTime: string;
-  travelTime: string;
-  isMonthlyPassEligible: boolean;
-  stops: number;
-}
-
-export interface FareInfo {
-  adult: number;
-  child: number;
-  disabled: number;
-  senior: number;
 }
 
 // Constants
@@ -241,7 +224,7 @@ export class TrainService {
         throw new Error(`Fare API request failed: ${response.status} ${response.statusText}`);
       }
 
-      const fareData = await response.json();
+      const fareData = await response.json() as TDXFareResponse;
       return this.processFareData(fareData);
     } catch (error) {
       this.errorHandler.logError('Error fetching fare data', error, {
@@ -255,7 +238,7 @@ export class TrainService {
   /**
    * Process fare data from TDX API response
    */
-  private processFareData(fareResponse: any): FareInfo {
+  private processFareData(fareResponse: TDXFareResponse): FareInfo {
     // TDX v3 API fare response processing
     const fares = fareResponse.ODFares || fareResponse.Fares || [];
     

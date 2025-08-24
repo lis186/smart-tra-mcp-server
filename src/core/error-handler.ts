@@ -20,12 +20,7 @@ export interface CategorizedError {
   context?: Record<string, any>;
 }
 
-export interface MCPToolResponse {
-  content: Array<{
-    type: 'text';
-    text: string;
-  }>;
-}
+import type { MCPToolResponse } from '../types/mcp.types.js';
 
 export class ErrorHandler {
   private sessionId: string;

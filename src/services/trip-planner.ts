@@ -4,7 +4,8 @@
  */
 
 import { DataManager, TRAStation } from '../core/data-manager.js';
-import { TrainService, TrainSearchResult } from './train-service.js';
+import { TrainService } from './train-service.js';
+import { TrainSearchResult } from '../types/common.types.js';
 import { QueryParser, ParsedQuery } from '../query-parser.js';
 import { TimeUtils } from '../utils/time-utils.js';
 
