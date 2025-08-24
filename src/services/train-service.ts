@@ -7,6 +7,7 @@ import { AuthManager } from '../core/auth-manager.js';
 import { ErrorHandler } from '../core/error-handler.js';
 import { TimeUtils } from '../utils/time-utils.js';
 import { TDXFareResponse } from '../types/tdx.types.js';
+import { TrainSearchResult, FareInfo } from '../types/common.types.js';
 
 // TDX API interfaces
 export interface TRATrainTimetable {
@@ -32,25 +33,6 @@ export interface TDXDateRangeResponse {
 
 export interface TDXTrainTimetableResponse {
   TrainTimetables: TRATrainTimetable[];
-}
-
-export interface TrainSearchResult {
-  trainNo: string;
-  trainType: string;
-  origin: string;
-  destination: string;
-  departureTime: string;
-  arrivalTime: string;
-  travelTime: string;
-  isMonthlyPassEligible: boolean;
-  stops: number;
-}
-
-export interface FareInfo {
-  adult: number;
-  child: number;
-  disabled: number;
-  senior: number;
 }
 
 // Constants
