@@ -5,7 +5,7 @@
 
 set -e
 
-PROJECT_ID=${1:-"your-gcp-project-id"}
+PROJECT_ID=${1:-"n8n-automation-424916"}
 REGION=${2:-"asia-east1"}
 SERVICE_NAME="smart-tra-mcp-server"
 IMAGE_NAME="gcr.io/${PROJECT_ID}/${SERVICE_NAME}"
@@ -33,8 +33,8 @@ gcloud run deploy ${SERVICE_NAME} \
   --timeout 300 \
   --concurrency 80 \
   --set-env-vars NODE_ENV=production \
-  --set-env-vars TDX_CLIENT_ID=lis186-f3b5a6e8-5d8c-4fe7 \
-  --set-env-vars TDX_CLIENT_SECRET=ed58c659-b6e7-4d5a-b44b-b0f1b7c72b3a \
+  --set-env-vars TDX_CLIENT_ID=lis186-103d3ee2-0f5a-45cd \
+  --set-env-vars TDX_CLIENT_SECRET=c7dc9240-e923-457e-a39c-d01d53d2b8ed \
   --project ${PROJECT_ID}
 
 echo "✅ Deployment complete!"
