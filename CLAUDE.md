@@ -54,9 +54,11 @@ Following the Shopify Storefront MCP design philosophy:
    - Fuzzy matching with confidence scoring
    - Common abbreviations support (北車 → 臺北)
 
-3. **`plan_trip`** - Trip planning and recommendations ⏳ **PLANNED**
-   - Provide actionable suggestions based on schedules and real-time data
-   - Include backup options and transfer recommendations
+3. **`plan_trip`** - Trip planning and recommendations ✅ **COMPLETE**
+   - Journey planning with multi-segment routes and transfers
+   - Non-station destination mapping (九份→瑞芳, 墾丁→枋寮, etc.)
+   - Branch line transfer detection and routing
+   - TRA-only scope with clear service boundaries
 
 ### Technology Stack
 
@@ -176,6 +178,114 @@ The repository includes two reference MCP servers:
 - ❌ Parameter structure inconsistency
 - ❌ Implementation-focused naming
 - ❌ Data-only responses without guidance
+
+## Destination Mapping Guidelines
+
+The `plan_trip` tool includes mapping of popular non-station destinations to their nearest TRA stations. These guidelines ensure consistent, helpful, and maintainable mappings.
+
+### What SHOULD Be Included
+
+#### 1. Major Tourist Destinations Without TRA Stations
+Popular places tourists frequently ask about that need clear TRA guidance:
+- ✅ `'九份' → '瑞芳'` - Jiufen is extremely popular, clear bus connection from Ruifang
+- ✅ `'墾丁' → '枋寮'` - Kenting is major beach destination, Fangliao is practical endpoint
+- ✅ `'太魯閣' → '新城'` - Taroko National Park, Xincheng is closer than Hualien
+
+#### 2. Places with Non-Obvious TRA Connections  
+Locations where the nearest useful TRA station isn't obvious:
+- ✅ `'日月潭' → '車埕'` - Sun Moon Lake via scenic Jiji Line, not obvious to tourists
+- ✅ `'阿里山' → '嘉義'` - Alishan Forest Railway connection point, not intuitive
+
+#### 3. Branch Line Tourist Spots
+Popular destinations that ARE TRA stations but users might not realize:
+- ✅ `'平溪' → '平溪'` - Pingxi Line destination, tourists may not know it's a station
+- ✅ `'菁桐' → '菁桐'` - End of Pingxi Line, preserve for disambiguation
+
+#### 4. MRT-Only Areas (Map to TRA Hub)
+Famous destinations served only by MRT, mapped to major TRA interchange:
+- ✅ `'淡水' → '台北'` - Danshui is MRT-only, Taipei Main is logical TRA hub
+- ✅ `'北投溫泉' → '台北'` - Beitou hot springs, specify "溫泉" to be more precise
+
+### What SHOULD NOT Be Included
+
+#### 1. Places with Obvious TRA Station Names
+Don't create redundant mappings:
+- ❌ `'台北101' → '台北'` - Users already know to use Taipei station
+- ❌ `'花蓮市' → '花蓮'` - City name matches station name obviously
+
+#### 2. Too Specific or Minor Locations
+Avoid cluttering with every small attraction:
+- ❌ `'某某夜市'` - Unless extremely famous (like 士林夜市)
+- ❌ `'某某飯店'` - Individual hotels or businesses
+- ❌ `'某某百貨'` - Department stores or malls
+
+#### 3. Places Too Far from TRA Coverage
+Don't map if TRA isn't a reasonable transportation option:
+- ❌ `'澎湖'` - Requires flight/long ferry, TRA irrelevant to the journey
+- ❌ `'蘭嶼'` - Too remote, multi-day journey from TRA network
+- ❌ `'馬祖'` - Different island system entirely
+
+#### 4. Ambiguous Generic Names
+Names that could refer to multiple places:
+- ❌ `'老街'` - Which old street? Too generic
+- ❌ `'溫泉'` - Which hot spring area? Be specific
+- ❌ `'夜市'` - Which night market? Needs specificity
+
+#### 5. Already Clear Station Areas
+Don't map if it's obviously part of an existing TRA station area:
+- ❌ `'礁溪溫泉' → '礁溪'` - Jiaoxi station IS the hot spring area
+- ❌ `'瑞芳老街' → '瑞芳'` - Obviously served by Ruifang station
+
+### The Three-Criteria Test
+
+Before adding any mapping, it must pass ALL three criteria:
+
+1. **Famous Enough**: Would many users ask about this destination?
+2. **Non-Obvious**: Is the TRA connection unclear to average users?  
+3. **TRA Reasonable**: Is TRA a logical part of the journey there?
+
+If any criterion fails → Skip the mapping
+
+### Quality Standards
+
+- **TRA-Only Scope**: Never include MRT, HSR, or bus stations as destinations
+- **Maximum ~15-20 Mappings**: Avoid bloat, focus on most requested destinations  
+- **Clear Documentation**: Each mapping should have a clear rationale
+- **Regular Review**: Remove mappings that prove unused or problematic
+- **Consistent Response Format**: Always explain the mapping to users
+
+### Current Mapping List
+
+```typescript
+// Northern tourist spots  
+'九份': ['瑞芳'],           // Famous old town, clear bus connection
+'金瓜石': ['瑞芳'],         // Historic gold mining area
+'野柳': ['基隆'],           // Geological park, bus from Keelung
+
+// REMOVED: Branch line destinations (these ARE TRA stations)
+// '平溪', '十分', '菁桐' are actual TRA stations on Pingxi Line
+// They should be handled by transfer detection, not destination mapping
+
+// Central Taiwan
+'日月潭': ['車埕'],         // Sun Moon Lake via scenic Jiji Line
+'清境': ['台中'],           // Cingjing Farm, Taichung is nearest major hub
+
+// Southern Taiwan  
+'墾丁': ['枋寮'],           // Kenting beaches, Fangliao is practical endpoint
+'旗津': ['高雄'],           // Cijin Island, ferry from Kaohsiung area
+
+// Eastern Taiwan  
+'太魯閣': ['新城'],         // Taroko National Park, Xincheng closer than Hualien
+
+// REMOVED: Hot spring areas that ARE TRA stations
+// '礁溪', '知本' are actual TRA stations, not tourist destinations to map
+
+// Special cases
+'阿里山': ['嘉義'],         // Alishan Forest Railway connection
+'淡水': ['台北'],           // MRT-only area, map to TRA Taipei
+'北投': ['台北'],           // MRT-only area, map to TRA Taipei  
+'陽明山': ['台北']          // Mountain area, map to TRA Taipei
+```
 
 ### Response Format
 
@@ -375,13 +485,13 @@ smart-tra-mcp-server/
    - Enhanced visual design (🟢🟡🔴 traffic lights, 🚈🚏➡️ transit icons)
    - **Delay time adjustment** - automatic calculation of adjusted times based on delays
 9. ✅ **TDX v3 API Upgrade**: Complete migration from v2 to v3 API endpoints with proper response parsing
+10. ✅ **Stage 9**: `plan_trip` tool - Journey planning with transfers and non-station destination mapping
 
 ## Next Steps
 
 1. **Stage 7**: Basic deployment to Google Cloud Run
-2. **Stage 9**: Implement `plan_trip` tool for trip planning
-3. **Phase 2**: Basic transfer planning (main↔branch lines)
-4. **Phase 3**: Intelligent transfers with real-time delay considerations
+2. **Phase 2**: Enhanced transfer optimization with real-time considerations
+3. **Phase 3**: Performance optimization and caching improvements
 
 ## Implementation Best Practices
 
@@ -436,6 +546,8 @@ smart-tra-mcp-server/
 - [ ] No technical jargon in user-facing descriptions
 - [ ] Consistent error handling across all tools
 - [ ] Natural language query support in all tools
+- [ ] Destination mappings follow three-criteria test (Famous + Non-obvious + TRA-reasonable)
+- [ ] TRA-only scope maintained in all mappings
 
 ### Common Pitfalls to Avoid
 
@@ -455,6 +567,7 @@ smart-tra-mcp-server/
 - **lessons-learned.md**: Document challenges and solutions
 - **troubleshooting.md**: Common issues and fixes
 - **api-coverage.md**: Track which TDX APIs are integrated
+- **Destination mappings**: Keep CLAUDE.md mapping list updated when adding/removing destinations
 
 ### Decision Framework
 
@@ -491,7 +604,8 @@ When implementing new features or functionality:
 7. **Run tests and linters** - Execute `npm run build`, `npm test`, `npm run lint` if available
 8. **Ask for feedback** - Request user verification at key milestones
 9. **Document decisions** - Update relevant docs if making architectural choices
-10. **Only push/PR when requested** - Never push or create PRs unless explicitly asked
+10. **Update destination mappings** - If adding/removing mappings, update both code and CLAUDE.md documentation
+11. **Only push/PR when requested** - Never push or create PRs unless explicitly asked
 
 ### Important Reminders
 

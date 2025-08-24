@@ -456,37 +456,55 @@
 
 ---
 
-## Stage 9: plan_trip Tool (Complete MVP)
+## Stage 9: plan_trip Tool (Complete MVP) ✅
 
 **Goal**: Third tool for trip planning
 **Success Criteria**: Basic route suggestions
 **Tests**: Multi-segment journey planning
-**Status**: Not Started
+**Status**: Complete ✅
 
-### Tasks (Learn from Previous Stages)
+### Tasks (Learn from Previous Stages) ✅
 
-1. **Route calculation logic** (Implementation Consistency)
+1. **Route calculation logic** (Implementation Consistency) ✅
    - Use existing search_trains functionality
    - Basic transfer detection
    - Multiple option generation
    - Simple ranking by time/convenience
 
-2. **Transfer handling** (Hybrid Solutions)
+2. **Transfer handling** (Hybrid Solutions) ✅
    - Fixed buffer times (15min main, 30min branch)
    - Major transfer stations identified
    - Risk assessment for connections
    - Clear transfer instructions
 
-3. **Response formatting** (User Perspective)
+3. **Response formatting** (User Perspective) ✅
    - Multiple route options
    - Clear time/cost breakdown
    - Risk indicators and alternatives
    - Actionable next steps
 
-### Validation Method
+### Implementation Results
 
-- Can plan basic multi-segment trips
-- Transfer suggestions realistic
+✅ **Completed Features**:
+
+- Non-station destination mapping (九份→瑞芳, 墾丁→枋寮, etc.)
+- Branch line transfer detection (平溪線, 集集線, 內灣線)
+- Multi-segment journey planning with transfer points
+- Direct route identification (台北→花蓮 direct vs 高雄→台東 transfer)
+- Train-only scope with clear boundaries (no bus/taxi advice)
+- Reuses existing search_trains for efficiency
+
+✅ **Test Coverage**:
+
+- 8 test cases covering all major scenarios
+- Non-station destinations, branch lines, transfers, direct routes
+
+### Validation Method ✅
+
+- Can plan basic multi-segment trips ✅
+- Transfer suggestions realistic ✅
+- Non-station destinations handled gracefully ✅
+- Clear scope boundaries (train-only) ✅
 - Response format helpful to users
 - Performance acceptable
 

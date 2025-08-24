@@ -7,14 +7,11 @@
     "build": "tsc",
     "dev": "tsc && node dist/server.js",
     "start": "node dist/server.js",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage",
-    "test:features": "jest src/test-cases.test.ts",
-    "test:performance": "jest src/performance.test.ts",
-    "test:parser": "jest src/server.test.ts",
-    "test:auth": "tsx src/test-tdx-auth.ts",
-    "test:stage8": "jest --testPathPattern='test-cases|performance' --verbose"
+    "test": "node tests/run-all-tests.js",
+    "test:unit": "node tests/unit/destination-mapping.test.js",
+    "test:integration": "node tests/integration/tool-boundaries.test.js && node tests/integration/delegation.test.js",
+    "test:e2e": "node tests/e2e/user-journeys.test.js",
+    "test:auth": "TDX_CLIENT_ID=test_client_id TDX_CLIENT_SECRET=test_secret npm run test"
   },
   "repository": {
     "type": "git",
