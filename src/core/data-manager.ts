@@ -6,6 +6,8 @@
 import { AuthManager } from './auth-manager.js';
 import { ErrorHandler, ErrorCategory } from './error-handler.js';
 import type { StationMockData } from '../types/mcp.types.js';
+import type { TDXStationResponse } from '../types/tdx.types.js';
+import type { CachedLiveData } from '../types/common.types.js';
 
 export interface TRAStation {
   StationUID: string;
@@ -21,11 +23,6 @@ export interface TRAStation {
   StationAddress?: string;
   StationPhone?: string;
   StationClass?: string;
-}
-
-export interface CachedLiveData {
-  data: Array<[string, any]>;
-  expiresAt: number;
 }
 
 const CACHE_CONFIG = {
@@ -78,14 +75,14 @@ export class DataManager {
         throw new Error(`Station API request failed: ${response.status} ${response.statusText}`);
       }
 
-      const data = await response.json() as any;
+      const data = await response.json() as TDXStationResponse;
       const stations = data.data || data.Stations || [];
       
       if (!Array.isArray(stations) || stations.length === 0) {
         throw new Error('No station data received from API');
       }
 
-      this.stationData = stations;
+      this.stationData = stations as TRAStation[];
       this.buildStationIndices();
       this.stationDataLoaded = true;
       this.stationLoadFailed = false;
@@ -272,8 +269,12 @@ export class DataManager {
    */
   cacheLiveData(stationId: string, data: Array<{ TrainNo: string; [key: string]: unknown }>): void {
     const expiresAt = Date.now() + CACHE_CONFIG.LIVE_DATA_CACHE_DURATION;
+    const dataMap = new Map<string, unknown>();
+    data.forEach(item => dataMap.set(item.TrainNo, item));
+    
     this.liveDataCache.set(stationId, {
-      data: data.map(item => [item.TrainNo, item]),
+      data: dataMap,
+      fetchedAt: Date.now(),
       expiresAt
     });
   }
@@ -281,7 +282,7 @@ export class DataManager {
   /**
    * Get cached live data for a station
    */
-  getCachedLiveData(stationId: string): Map<string, any> | null {
+  getCachedLiveData(stationId: string): Map<string, unknown> | null {
     const cached = this.liveDataCache.get(stationId);
     
     if (!cached) return null;
@@ -291,7 +292,7 @@ export class DataManager {
       return null;
     }
     
-    return new Map(cached.data);
+    return cached.data;
   }
 
   /**

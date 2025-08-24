@@ -90,6 +90,14 @@ export interface TDXLiveBoardEntry {
 }
 
 /**
+ * TDX Station API response structure
+ */
+export interface TDXStationResponse {
+  data?: TDXStation[];
+  Stations?: TDXStation[];
+}
+
+/**
  * TDX API error response
  */
 export interface TDXErrorResponse {

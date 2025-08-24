@@ -314,10 +314,18 @@ describe('Smart TRA MCP Server - Core Tests', () => {
     it('should handle empty and invalid inputs gracefully', () => {
       const parser = new QueryParser();
       
-      const edgeCases = ['', '   ', '\n\t', null, undefined];
+      const edgeCases: string[] = ['', '   ', '\n\t'];
+      const nullCases = [null, undefined];
       
       edgeCases.forEach(input => {
-        const result = parser.parse(input as any);
+        const result = parser.parse(input);
+        expect(result).toBeDefined();
+        expect(result.confidence).toBeGreaterThanOrEqual(0);
+        expect(result.confidence).toBeLessThanOrEqual(1);
+      });
+      
+      nullCases.forEach(input => {
+        const result = parser.parse(input || '');
         expect(result).toBeDefined();
         expect(result.confidence).toBeGreaterThanOrEqual(0);
         expect(result.confidence).toBeLessThanOrEqual(1);
