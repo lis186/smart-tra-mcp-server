@@ -31,15 +31,34 @@ export class ExpressServer {
     this.app.use(express.json());
     this.app.use(express.urlencoded({ extended: true }));
     
-    // CORS for development
-    if (this.config.environment === 'development') {
-      this.app.use((req, res, next) => {
+    // CORS configuration
+    this.app.use((req, res, next) => {
+      const allowedOrigins = process.env.ALLOWED_ORIGINS;
+      
+      if (this.config.environment === 'development') {
+        // Allow all origins in development
         res.header('Access-Control-Allow-Origin', '*');
-        res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-        res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-        next();
-      });
-    }
+      } else if (allowedOrigins) {
+        // In production, only allow specified origins
+        const origins = allowedOrigins.split(',').map(o => o.trim());
+        const origin = req.get('Origin');
+        
+        if (origin && origins.includes(origin)) {
+          res.header('Access-Control-Allow-Origin', origin);
+        }
+      }
+      
+      res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+      res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      res.header('Access-Control-Allow-Credentials', 'true');
+      
+      // Handle preflight requests
+      if (req.method === 'OPTIONS') {
+        return res.status(200).end();
+      }
+      
+      next();
+    });
   }
 
   private async setupMCPTransport(): Promise<void> {
