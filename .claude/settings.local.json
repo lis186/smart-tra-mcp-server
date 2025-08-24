@@ -29,7 +29,9 @@
       "Bash(timeout:*)",
       "Bash(touch:*)",
       "Bash(npm run test:parser:*)",
-      "Bash(gh pr create:*)"
+      "Bash(gh pr create:*)",
+      "Bash(git fetch:*)",
+      "Bash(gh pr:*)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits"

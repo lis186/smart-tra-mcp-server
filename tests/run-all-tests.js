@@ -9,11 +9,12 @@ import ToolBoundaryTests from './integration/tool-boundaries.test.js';
 import DelegationTests from './integration/delegation.test.js';
 import UserJourneyTests from './e2e/user-journeys.test.js';
 import DestinationMappingTests from './unit/destination-mapping.test.js';
+import EdgeCaseTests from './unit/edge-cases.test.js';
 
 class TestSuiteRunner {
   constructor() {
     this.suites = [
-      { name: 'Unit Tests', tests: [DestinationMappingTests] },
+      { name: 'Unit Tests', tests: [DestinationMappingTests, EdgeCaseTests] },
       { name: 'Integration Tests', tests: [ToolBoundaryTests, DelegationTests] },
       { name: 'E2E Tests', tests: [UserJourneyTests] }
     ];

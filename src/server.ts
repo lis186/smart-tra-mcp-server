@@ -1861,22 +1861,11 @@ class SmartTRAServer {
       };
 
     } catch (error) {
-      this.logError('Error in handleSearchStation', error, { query, context });
+      const categorizedError = this.categorizeError(error);
+      this.logError('Error in handleSearchStation', categorizedError, { query, context });
       
-      // Check if this is a validation error vs a search error
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      const isValidationError = errorMessage.includes('must be a string') || 
-                               errorMessage.includes('cannot be empty') || 
-                               errorMessage.includes('exceeds maximum length');
-      
-      return {
-        content: [{
-          type: 'text',
-          text: isValidationError 
-            ? `❌ Unable to search stations. Please try again or check your query format.`
-            : `❌ Error searching stations. Please try again or contact support if the issue persists.`
-        }]
-      };
+      // Use standardized error handling
+      return this.createStandardizedErrorResponse(categorizedError, query, 'search_station');
     }
   }
 
@@ -2286,18 +2275,11 @@ class SmartTRAServer {
       };
 
     } catch (error) {
-      this.logError('Error in handleSearchTrains', error, { query, context });
-      return {
-        content: [{
-          type: 'text',
-          text: `❌ Unable to search trains at this time.\n\n` +
-                `This might be due to:\n` +
-                `• Service temporarily unavailable\n` +
-                `• Invalid station names or route\n` +
-                `• Network connection issues\n\n` +
-                `Please try again later or verify your station names.`
-        }]
-      };
+      const categorizedError = this.categorizeError(error);
+      this.logError('Error in handleSearchTrains', categorizedError, { query, context });
+      
+      // Use standardized error handling
+      return this.createStandardizedErrorResponse(categorizedError, query, 'search_trains');
     }
   }
 
@@ -2984,8 +2966,8 @@ class SmartTRAServer {
         this.validateApiInput(context, 'context', this.MAX_CONTEXT_LENGTH) : 
         undefined;
       
-      // Parse the trip planning query
-      const parsed = this.queryParser.parse(validatedQuery);
+      // Parse the trip planning query with enhanced NLP support
+      const parsed = this.parseEnhancedTripQuery(validatedQuery);
       
       // Check if destination is a known non-station location
       const nearestStationMapping = this.getNearestStationForDestination(parsed.destination || validatedQuery);
@@ -3019,8 +3001,85 @@ class SmartTRAServer {
       this.logError('plan_trip error', categorizedError);
       
       // Enhanced error handling with specific error types
-      return this.createPlanTripErrorResponse(categorizedError, validatedQuery);
+      return this.createStandardizedErrorResponse(categorizedError, validatedQuery, 'plan_trip');
     }
+  }
+
+  // Enhanced natural language parsing for trip planning queries
+  private parseEnhancedTripQuery(query: string): any {
+    // Start with base parser
+    const baseParsed = this.queryParser.parse(query);
+    
+    // Trip planning specific patterns
+    const tripPatterns = [
+      // How to get there patterns
+      /(.+?)(?:怎麼去|如何去|怎樣去|怎麼到)(.+)/,
+      /(.+?)(?:到|去)(.+?)(?:怎麼去|怎麼走|怎樣走)/,
+      
+      // Journey planning patterns  
+      /(?:規劃|安排|計劃)(.+?)(?:到|去)(.+?)(?:的)?(?:行程|路線|旅程)/,
+      /(.+?)(?:到|去)(.+?)(?:的)?(?:行程|路線|旅程)(?:規劃|安排|計劃)/,
+      
+      // Transportation patterns
+      /(?:搭|坐|搭乘)(?:火車|台鐵|列車)(?:從|由)?(.+?)(?:到|去)(.+)/,
+      /(.+?)(?:搭|坐|搭乘)(?:火車|台鐵|列車)(?:到|去)(.+)/,
+      
+      // Travel patterns
+      /(.+?)(?:到|去)(.+?)(?:旅行|旅遊|遊玩)/,
+      /(?:去|到)(.+?)(?:旅行|旅遊|遊玩)/,
+      
+      // Generic enhanced patterns
+      /(.+?)(?:到|去|→)(.+?)(?:的交通|交通方式)/,
+      /(?:從|由)(.+?)(?:到|去|→)(.+)/
+    ];
+    
+    // Try trip planning patterns if base parser didn't find origin/destination
+    if (!baseParsed.origin || !baseParsed.destination) {
+      for (const pattern of tripPatterns) {
+        const match = query.match(pattern);
+        if (match) {
+          const [, origin, destination] = match;
+          
+          if (origin && destination) {
+            baseParsed.origin = origin.trim();
+            baseParsed.destination = destination.trim();
+            baseParsed.confidence = Math.max(baseParsed.confidence, 0.8);
+            baseParsed.matchedPatterns.push('enhanced_trip_planning');
+            break;
+          }
+        }
+      }
+    }
+    
+    // Extract planning preferences from trip queries
+    const preferences = baseParsed.preferences || {};
+    
+    // Planning-specific preferences
+    if (query.includes('最快') || query.includes('快速') || query.includes('急')) {
+      preferences.fastest = true;
+    }
+    if (query.includes('最便宜') || query.includes('便宜') || query.includes('省錢')) {
+      preferences.cheapest = true;
+    }
+    if (query.includes('直達') || query.includes('不轉車') || query.includes('直接')) {
+      preferences.directOnly = true;
+    }
+    if (query.includes('景觀') || query.includes('風景') || query.includes('觀光')) {
+      preferences.scenic = true;
+    }
+    if (query.includes('轉車') || query.includes('換車')) {
+      preferences.allowTransfers = true;
+    }
+    
+    baseParsed.preferences = preferences;
+    
+    // Improve confidence for trip planning queries
+    if (query.includes('規劃') || query.includes('怎麼去') || query.includes('路線') || query.includes('行程')) {
+      baseParsed.confidence = Math.max(baseParsed.confidence, 0.85);
+      baseParsed.matchedPatterns.push('trip_planning_keywords');
+    }
+    
+    return baseParsed;
   }
 
   // Input validation for destination queries
@@ -3218,8 +3277,8 @@ class SmartTRAServer {
     return null;
   }
 
-  // Create specific error response for plan_trip failures
-  private createPlanTripErrorResponse(categorizedError: any, query: string): any {
+  // Create standardized error response for all tools (unified error handling)
+  private createStandardizedErrorResponse(categorizedError: any, query: string, toolName: string): any {
     let errorMessage = '';
     let suggestions: string[] = [];
 
@@ -3242,20 +3301,12 @@ class SmartTRAServer {
 
       case 'validation':
         errorMessage = '📝 查詢格式錯誤';
-        suggestions = [
-          '• 確認站名正確 (使用 search_station 工具)',
-          '• 指定明確的出發地和目的地',
-          '• 例如: "台北到花蓮" 或 "明天早上台中到高雄"'
-        ];
+        suggestions = this.getValidationSuggestions(toolName);
         break;
 
       case 'data':
         errorMessage = '📊 資料處理錯誤';
-        suggestions = [
-          '• 嘗試使用更明確的站名',
-          '• 如為觀光景點，我們會提供最近火車站的班次',
-          '• 使用 search_station 確認站名'
-        ];
+        suggestions = this.getDataErrorSuggestions(toolName);
         break;
 
       case 'rate_limit':
@@ -3267,12 +3318,8 @@ class SmartTRAServer {
         break;
 
       default:
-        errorMessage = '❌ 行程規劃失敗';
-        suggestions = [
-          '• 確認站名正確 (使用 search_station 工具)',
-          '• 指定明確的出發地和目的地',
-          '• 如為觀光景點，我們會提供最近火車站的班次'
-        ];
+        errorMessage = `❌ ${this.getToolDisplayName(toolName)}失敗`;
+        suggestions = this.getDefaultSuggestions(toolName);
     }
 
     const responseText = `${errorMessage}: ${categorizedError.message}\n\n` +
@@ -3285,6 +3332,100 @@ class SmartTRAServer {
         text: responseText
       }]
     };
+  }
+
+  // Helper methods for tool-specific error suggestions
+  private getToolDisplayName(toolName: string): string {
+    switch (toolName) {
+      case 'search_trains': return '列車查詢';
+      case 'search_station': return '車站搜尋';  
+      case 'plan_trip': return '行程規劃';
+      default: return '查詢';
+    }
+  }
+
+  private getValidationSuggestions(toolName: string): string[] {
+    const baseSuggestions = ['• 確認輸入格式正確'];
+    
+    switch (toolName) {
+      case 'search_trains':
+        return [
+          ...baseSuggestions,
+          '• 確認站名正確 (使用 search_station 工具)',
+          '• 例如: "台北到花蓮" 或 "明天早上台中到高雄"',
+          '• 車次號碼請使用純數字 (如: 152, 1234)'
+        ];
+      case 'search_station':
+        return [
+          ...baseSuggestions,
+          '• 輸入完整或部分車站名稱',
+          '• 例如: "台北", "花蓮", "高雄"',
+          '• 支援模糊搜尋和縮寫'
+        ];
+      case 'plan_trip':
+        return [
+          ...baseSuggestions,
+          '• 指定明確的出發地和目的地',
+          '• 例如: "台北到花蓮" 或 "明天早上台中到高雄"',
+          '• 觀光景點會自動對應最近火車站'
+        ];
+      default:
+        return baseSuggestions;
+    }
+  }
+
+  private getDataErrorSuggestions(toolName: string): string[] {
+    const baseSuggestions = ['• 嘗試使用更明確的關鍵字'];
+    
+    switch (toolName) {
+      case 'search_trains':
+        return [
+          ...baseSuggestions,
+          '• 確認站名拼寫正確',
+          '• 檢查日期和時間格式',
+          '• 使用 search_station 確認站名'
+        ];
+      case 'search_station':
+        return [
+          ...baseSuggestions,
+          '• 嘗試輸入車站的不同寫法',
+          '• 使用常見縮寫 (如: 北車, 台中)'
+        ];
+      case 'plan_trip':
+        return [
+          ...baseSuggestions,
+          '• 如為觀光景點，系統會提供最近火車站的班次',
+          '• 使用 search_station 確認站名',
+          '• 檢查是否需要轉車的路線'
+        ];
+      default:
+        return baseSuggestions;
+    }
+  }
+
+  private getDefaultSuggestions(toolName: string): string[] {
+    switch (toolName) {
+      case 'search_trains':
+        return [
+          '• 確認站名正確 (使用 search_station 工具)',
+          '• 檢查網路連線狀況',
+          '• 稍後再試或簡化查詢條件'
+        ];
+      case 'search_station':
+        return [
+          '• 檢查網路連線狀況',
+          '• 嘗試其他車站名稱',
+          '• 稍後再試'
+        ];
+      case 'plan_trip':
+        return [
+          '• 確認站名正確 (使用 search_station 工具)',
+          '• 指定明確的出發地和目的地',
+          '• 如為觀光景點，我們會提供最近火車站的班次'
+        ];
+      default:
+        return ['• 請稍後再試'];
+    }
   }
 
   // Plan multi-segment journey with transfers
