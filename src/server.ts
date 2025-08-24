@@ -654,18 +654,7 @@ class SmartTRAServer {
           return await this.handleSearchStation(sanitizedQuery, sanitizedContext);
 
         case 'plan_trip':
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `[STAGE 2 MOCK] Trip planning for: "${sanitizedQuery}"${sanitizedContext ? ` (context: ${sanitizedContext})` : ''}\n\n` +
-                      `🗺️ This is a mock response demonstrating MCP protocol functionality.\n` +
-                      `✅ Query validated, sanitized, and rate-limited successfully.\n` +
-                      `🔄 Real TDX trip planning integration coming in Stage 3.\n\n` +
-                      `Expected future response: Route options, timing, transfers, costs.`,
-              },
-            ],
-          };
+          return await this.handlePlanTrip(sanitizedQuery, sanitizedContext);
 
         default:
           throw new Error(`Unknown tool: ${name}`);
@@ -2983,6 +2972,315 @@ class SmartTRAServer {
     }
   }
 
+  // Handle plan_trip tool request - Complete journey planning with transfers
+  private async handlePlanTrip(query: string, context?: string): Promise<any> {
+    try {
+      // Validate inputs
+      const validatedQuery = this.validateApiInput(query, 'query', this.MAX_QUERY_LENGTH);
+      const validatedContext = context ? 
+        this.validateApiInput(context, 'context', this.MAX_CONTEXT_LENGTH) : 
+        undefined;
+      
+      // Parse the trip planning query
+      const parsed = this.queryParser.parse(validatedQuery);
+      
+      // Check if destination is a known non-station location
+      const nearestStationMapping = this.getNearestStationForDestination(parsed.destination || validatedQuery);
+      
+      if (nearestStationMapping && nearestStationMapping.isNonStation) {
+        // Handle non-station destinations
+        return this.handleNonStationDestination(
+          parsed, 
+          nearestStationMapping, 
+          validatedQuery, 
+          validatedContext
+        );
+      }
+      
+      // Check if transfer is needed
+      const requiresTransfer = await this.checkIfTransferRequired(
+        parsed.origin || '',
+        parsed.destination || ''
+      );
+      
+      if (requiresTransfer) {
+        // Plan multi-segment journey with transfers
+        return await this.planMultiSegmentJourney(parsed, validatedQuery, validatedContext);
+      } else {
+        // Direct route available - use search_trains functionality
+        return await this.handleSearchTrains(validatedQuery, validatedContext);
+      }
+      
+    } catch (error) {
+      const categorizedError = this.categorizeError(error);
+      this.logError('plan_trip error', categorizedError);
+      
+      return {
+        content: [{
+          type: 'text',
+          text: `❌ 無法規劃行程: ${categorizedError.message}\n\n` +
+                `請嘗試:\n` +
+                `• 確認站名正確 (使用 search_station 工具)\n` +
+                `• 指定明確的出發地和目的地\n` +
+                `• 如為觀光景點，我們會提供最近火車站的班次`
+        }]
+      };
+    }
+  }
+
+  // Get nearest station for popular non-station destinations
+  private getNearestStationForDestination(destination: string): { station: string; isNonStation: boolean; originalName: string } | null {
+    if (!destination) return null;
+    
+    // Mapping of popular NON-STATION destinations to nearest TRA stations
+    // IMPORTANT: Only include places that are NOT TRA stations
+    // DO NOT include actual TRA stations (even branch lines) - let them go to transfer detection
+    const destinationMap: Record<string, string[]> = {
+      // Northern tourist spots (NOT TRA stations)
+      '九份': ['瑞芳'],
+      '金瓜石': ['瑞芳'],
+      '野柳': ['基隆'],
+      
+      // Central Taiwan tourist spots (NOT TRA stations) 
+      '日月潭': ['車埕'],  // Sun Moon Lake -> Jiji Line station
+      '清境': ['台中'],    // Cingjing Farm -> nearest major TRA hub
+      
+      // Southern Taiwan tourist spots (NOT TRA stations)
+      '墾丁': ['枋寮'],    // Kenting -> southernmost practical TRA station
+      '旗津': ['高雄'],    // Cijin Island -> ferry from Kaohsiung
+      
+      // Eastern Taiwan tourist spots (NOT TRA stations)
+      '太魯閣': ['新城'],   // Taroko National Park -> closer than Hualien
+      
+      // Mountain destinations (NOT TRA stations)
+      '阿里山': ['嘉義'],   // Alishan -> AFR connection point
+      
+      // MRT-only destinations (NOT TRA stations)
+      '淡水': ['台北'],     // Danshui MRT -> TRA Taipei hub
+      '北投': ['台北'],     // Beitou MRT -> TRA Taipei hub  
+      '陽明山': ['台北']    // Yangmingshan -> TRA Taipei hub
+      
+      // NOTE: Removed actual TRA stations like 平溪, 十分, 菁桐, 礁溪, 知本
+      // These should be handled by transfer detection, not destination mapping
+    };
+    
+    const normalizedDest = destination.replace(/[車站]$/g, '').trim();
+    
+    for (const [place, stations] of Object.entries(destinationMap)) {
+      if (normalizedDest.includes(place) || place.includes(normalizedDest)) {
+        return {
+          station: stations[0], // Use first station as primary
+          isNonStation: true,
+          originalName: destination
+        };
+      }
+    }
+    
+    return null;
+  }
+
+  // Handle non-station destination queries
+  private handleNonStationDestination(
+    parsed: any,
+    nearestStation: { station: string; isNonStation: boolean; originalName: string },
+    query: string,
+    context?: string
+  ): any {
+    const responseText = 
+      `ℹ️ **"${nearestStation.originalName}" 不是火車站**\n\n` +
+      `最近的火車站: **${nearestStation.station}**\n\n` +
+      `以下是前往 ${nearestStation.station} 站的火車班次:\n` +
+      `─────────────────────────────\n\n`;
+    
+    // Modify query to search trains to the nearest station
+    const modifiedQuery = query.replace(nearestStation.originalName, nearestStation.station);
+    
+    // Use existing search_trains functionality
+    return this.handleSearchTrains(modifiedQuery, context).then(result => {
+      if (result.content && result.content[0]) {
+        result.content[0].text = responseText + result.content[0].text + 
+          `\n📍 **注意**: 本服務僅提供火車時刻表查詢。抵達 ${nearestStation.station} 站後的交通請自行安排。`;
+      }
+      return result;
+    });
+  }
+
+  // Check if transfer is required between two stations
+  private async checkIfTransferRequired(origin: string, destination: string): Promise<boolean> {
+    if (!origin || !destination) return false;
+    
+    // Define branch lines and their connection points
+    const branchLines: Record<string, string[]> = {
+      '平溪線': ['瑞芳', '十分', '平溪', '菁桐'],
+      '內灣線': ['竹東', '內灣', '六家'],
+      '集集線': ['二水', '集集', '車埕', '水里'],
+      '沙崙線': ['中洲', '沙崙', '長榮大學'],
+      '深澳線': ['瑞芳', '海科館', '八斗子']
+    };
+    
+    // Check if stations are on different branch lines
+    let originBranch = null;
+    let destBranch = null;
+    
+    for (const [line, stations] of Object.entries(branchLines)) {
+      if (stations.some(s => s === origin || origin.includes(s))) {
+        originBranch = line;
+      }
+      if (stations.some(s => s === destination || destination.includes(s))) {
+        destBranch = line;
+      }
+    }
+    
+    // If one is on branch line and other is not, or they're on different branch lines
+    if ((originBranch && !destBranch) || (!originBranch && destBranch) || 
+        (originBranch && destBranch && originBranch !== destBranch)) {
+      return true;
+    }
+    
+    // Check for cross-coast routes (e.g., from west coast to east coast)
+    const westCoastStations = ['基隆', '台北', '桃園', '新竹', '苗栗', '台中', '彰化', '雲林', '嘉義', '台南', '高雄', '屏東'];
+    const eastCoastStations = ['宜蘭', '羅東', '蘇澳', '花蓮', '玉里', '池上', '關山', '台東'];
+    
+    const isOriginWest = westCoastStations.some(s => origin.includes(s));
+    const isOriginEast = eastCoastStations.some(s => origin.includes(s));
+    const isDestWest = westCoastStations.some(s => destination.includes(s));
+    const isDestEast = eastCoastStations.some(s => destination.includes(s));
+    
+    // Some west-east routes require transfer (e.g., 高雄 to 台東)
+    if ((isOriginWest && isDestEast) || (isOriginEast && isDestWest)) {
+      // Special case: Some routes have direct trains
+      const directRoutes = [
+        ['台北', '花蓮'], ['台北', '台東'], ['樹林', '台東'],
+        ['花蓮', '台北'], ['台東', '台北'], ['台東', '樹林']
+      ];
+      
+      const hasDirectRoute = directRoutes.some(([a, b]) => 
+        (origin.includes(a) && destination.includes(b)) ||
+        (origin.includes(b) && destination.includes(a))
+      );
+      
+      return !hasDirectRoute;
+    }
+    
+    return false;
+  }
+
+  // Plan multi-segment journey with transfers
+  private async planMultiSegmentJourney(parsed: any, query: string, context?: string): Promise<any> {
+    const origin = parsed.origin || '';
+    const destination = parsed.destination || '';
+    
+    // Find optimal transfer point
+    const transferPoint = this.findOptimalTransferPoint(origin, destination);
+    
+    if (!transferPoint) {
+      // No transfer point found, try direct route
+      return await this.handleSearchTrains(query, context);
+    }
+    
+    let responseText = `🚂 **行程規劃: ${origin} → ${destination}**\n\n`;
+    responseText += `需要在 **${transferPoint}** 轉車\n\n`;
+    responseText += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    
+    // Search for first segment
+    const segment1Query = `${origin}到${transferPoint} ${parsed.date || ''} ${parsed.time || ''}`.trim();
+    const segment1Result = await this.handleSearchTrains(segment1Query, 'limit:3');
+    
+    // Search for second segment (with buffer time)
+    let segment2Query = `${transferPoint}到${destination}`;
+    if (segment1Result.content?.[0]?.text) {
+      // Try to extract arrival time from first segment
+      const arrivalMatch = segment1Result.content[0].text.match(/抵達: (\d{2}:\d{2})/);
+      if (arrivalMatch) {
+        const arrivalTime = arrivalMatch[1];
+        const bufferTime = this.addMinutesToTime(arrivalTime, 15); // 15 min transfer buffer
+        segment2Query += ` after ${bufferTime}`;
+      }
+    }
+    const segment2Result = await this.handleSearchTrains(segment2Query, 'limit:3');
+    
+    // Combine results
+    responseText += `**第一段: ${origin} → ${transferPoint}**\n`;
+    if (segment1Result.content?.[0]?.text) {
+      const segment1Text = segment1Result.content[0].text
+        .split('\n')
+        .slice(0, 15) // Take first few trains only
+        .join('\n');
+      responseText += segment1Text + '\n\n';
+    }
+    
+    responseText += `**第二段: ${transferPoint} → ${destination}**\n`;
+    if (segment2Result.content?.[0]?.text) {
+      const segment2Text = segment2Result.content[0].text
+        .split('\n')
+        .slice(0, 15) // Take first few trains only
+        .join('\n');
+      responseText += segment2Text + '\n\n';
+    }
+    
+    responseText += `💡 **建議事項:**\n`;
+    responseText += `• 請預留至少 10-15 分鐘轉車時間\n`;
+    responseText += `• 建議確認各段車票是否需分開購買\n`;
+    responseText += `• 可使用 search_trains 查詢各段詳細時刻表\n`;
+    
+    return {
+      content: [{
+        type: 'text',
+        text: responseText
+      }]
+    };
+  }
+
+  // Find optimal transfer point for journey
+  private findOptimalTransferPoint(origin: string, destination: string): string | null {
+    // Major transfer hubs
+    const transferHubs: Record<string, string[]> = {
+      '瑞芳': ['平溪線', '深澳線', '東部幹線'],
+      '二水': ['集集線', '西部幹線'],
+      '竹東': ['內灣線'],
+      '中洲': ['沙崙線'],
+      '台北': ['西部幹線', '東部幹線'],
+      '彰化': ['山線', '海線'],
+      '台中': ['山線', '海線'],
+      '高雄': ['西部幹線', '南迴線'],
+      '台東': ['南迴線', '東部幹線'],
+      '花蓮': ['東部幹線', '北迴線']
+    };
+    
+    // Logic to find best transfer point
+    // This is simplified - in production would use graph algorithm
+    
+    // Check for branch line connections
+    if (origin.includes('平溪') || origin.includes('十分') || origin.includes('菁桐')) {
+      return '瑞芳';
+    }
+    if (destination.includes('平溪') || destination.includes('十分') || destination.includes('菁桐')) {
+      return '瑞芳';
+    }
+    
+    if (origin.includes('集集') || origin.includes('車埕') || origin.includes('水里')) {
+      return '二水';
+    }
+    if (destination.includes('集集') || destination.includes('車埕') || destination.includes('水里')) {
+      return '二水';
+    }
+    
+    // For west-east transfers
+    if ((origin.includes('高雄') || origin.includes('屏東')) && destination.includes('台東')) {
+      return '枋寮';
+    }
+    if (origin.includes('台東') && (destination.includes('高雄') || destination.includes('屏東'))) {
+      return '枋寮';
+    }
+    
+    // Default major hubs
+    if (origin.includes('台北') || destination.includes('台北')) {
+      return '台北';
+    }
+    
+    return null;
+  }
+
   private setupGracefulShutdown() {
     // Only set up shutdown handlers if not in test environment
     if (!isTestEnvironment()) {
@@ -3169,6 +3467,13 @@ class SmartTRAServer {
       throw new Error('Test methods only available in test environment');
     }
     return this.handleSearchTrains(query, context);
+  }
+
+  async handlePlanTripForTest(query: string, context?: string): Promise<any> {
+    if (!isTestEnvironment()) {
+      throw new Error('Test methods only available in test environment');
+    }
+    return this.handlePlanTrip(query, context);
   }
 }
 
