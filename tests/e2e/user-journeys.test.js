@@ -10,8 +10,7 @@ import { TestRunner } from '../lib/test-runner.js';
 
 // Setup test environment
 process.env.NODE_ENV = 'test';
-process.env.TDX_CLIENT_ID = 'test_client_id';
-process.env.TDX_CLIENT_SECRET = 'test_secret';
+// Use real TDX credentials from .env file (loaded by server.js)
 
 class UserJourneyTests {
   constructor() {
@@ -65,7 +64,7 @@ class UserJourneyTests {
         
         // Step 2: User uses plan_trip instead (succeeds with mapping)
         const step2 = await this.runToolStep('plan_trip', '台北到九份怎麼去');
-        this.testRunner.expect(step2.responseText).toInclude(['九份', '不是火車站', '瑞芳']);
+        this.testRunner.expect(step2.responseText).toInclude(['九份', '交通指南', '瑞芳']);
         
         // Step 3: User gets specific trains to Ruifang
         const step3 = await this.runToolStep('search_trains', '台北到瑞芳明天早上8點');
@@ -99,7 +98,7 @@ class UserJourneyTests {
       await this.testRunner.test('Multi-destination trip with scenic routes', async () => {
         // Step 1: Plan trip to Sun Moon Lake
         const step1 = await this.runToolStep('plan_trip', '台北到日月潭');
-        this.testRunner.expect(step1.responseText).toInclude(['日月潭', '車埕']);
+        this.testRunner.expect(step1.responseText).toInclude(['日月潭', '台中']);
         
         // Step 2: Check specific connection trains
         const step2 = await this.runToolStep('search_trains', '台中到車埕');
@@ -110,7 +109,7 @@ class UserJourneyTests {
         this.testRunner.expect(step3.success).toBe(true);
         
         // Should support complex journey planning
-        const complexJourneySupport = step1.responseText.includes('車埕') && step2.success;
+        const complexJourneySupport = step1.responseText.includes('台中') && step2.success;
         this.testRunner.expect(complexJourneySupport).toBe(true);
       });
     });

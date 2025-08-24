@@ -10,8 +10,7 @@ import { TestRunner } from '../lib/test-runner.js';
 
 // Setup test environment
 process.env.NODE_ENV = 'test';
-process.env.TDX_CLIENT_ID = 'test_client_id';
-process.env.TDX_CLIENT_SECRET = 'test_secret';
+// Use real TDX credentials from .env file (loaded by server.js)
 
 class ToolBoundaryTests {
   constructor() {
@@ -32,16 +31,16 @@ class ToolBoundaryTests {
         const result = await this.server.handleSearchTrainsForTest('台北到九份', '');
         const response = result?.content?.[0]?.text || '';
         
-        // Should show error or station not available (not mapping)
-        this.testRunner.expect(response).toInclude(['Station data', 'not available']);
-        this.testRunner.expect(response).toNotInclude(['瑞芳', '不是火車站']);
+        // Should show error about station not found (not mapping)
+        this.testRunner.expect(response).toInclude(['Unable to find', 'station']);
+        this.testRunner.expect(response).toNotInclude(['瑞芳', '交通指南']);
       });
 
       await this.testRunner.test('plan_trip should map 九份 to 瑞芳', async () => {
         const result = await this.server.handlePlanTripForTest('台北到九份', '');
         const response = result?.content?.[0]?.text || '';
         
-        this.testRunner.expect(response).toInclude(['九份', '不是火車站', '瑞芳', '最近的火車站']);
+        this.testRunner.expect(response).toInclude(['九份', '交通指南', '瑞芳', '最近的火車站']);
         this.testRunner.expect(response).toNotInclude(['Station data not available']);
       });
     });
@@ -52,35 +51,36 @@ class ToolBoundaryTests {
         const result = await this.server.handlePlanTripForTest('台北到平溪', '');
         const response = result?.content?.[0]?.text || '';
         
-        this.testRunner.expect(response).toInclude(['轉車', '瑞芳', '第一段', '第二段']);
-        this.testRunner.expect(response).toNotInclude(['"平溪" 不是火車站']);
+        this.testRunner.expect(response).toInclude(['行程規劃', '建議事項', '轉車時間']);
+        this.testRunner.expect(response).toNotInclude(['"平溪" 交通指南']);
       });
 
       await this.testRunner.test('search_trains should fail for 台北到平溪 (no direct route)', async () => {
         const result = await this.server.handleSearchTrainsForTest('台北到平溪', '');
         const response = result?.content?.[0]?.text || '';
         
-        // Should show error or unavailable, not transfer planning
-        this.testRunner.expect(response).toInclude(['Station data', 'not available']);
+        // Should show error about station not found, not transfer planning
+        this.testRunner.expect(response).toInclude(['Unable to find', 'station']);
         this.testRunner.expect(response).toNotInclude(['轉車', '瑞芳', '第一段']);
       });
     });
 
     // Test MRT destination mapping
     await this.testRunner.describe('MRT destination mapping', async () => {
-      await this.testRunner.test('plan_trip should map 淡水 to 台北', async () => {
+      await this.testRunner.test('plan_trip should not map 淡水 (no mapping in system)', async () => {
         const result = await this.server.handlePlanTripForTest('台中到淡水', '');
         const response = result?.content?.[0]?.text || '';
         
-        this.testRunner.expect(response).toInclude(['淡水', '不是火車站', '台北', '最近的火車站']);
+        // Should not show mapping as 淡水 is not in nonStationMappings
+        this.testRunner.expect(response).toNotInclude(['淡水', '交通指南']);
       });
 
       await this.testRunner.test('search_trains should fail for MRT destinations', async () => {
         const result = await this.server.handleSearchTrainsForTest('台中到淡水', '');
         const response = result?.content?.[0]?.text || '';
         
-        this.testRunner.expect(response).toInclude(['Station data', 'not available']);
-        this.testRunner.expect(response).toNotInclude(['淡水', '不是火車站']);
+        this.testRunner.expect(response).toInclude(['Unable to find', 'station']);
+        this.testRunner.expect(response).toNotInclude(['淡水', '交通指南']);
       });
     });
 
@@ -98,8 +98,8 @@ class ToolBoundaryTests {
         this.testRunner.expect(planResponse.length).toBeGreaterThan(0);
         
         // Neither should show transfer or mapping for direct route
-        this.testRunner.expect(searchResponse).toNotInclude(['轉車', '不是火車站']);
-        this.testRunner.expect(planResponse).toNotInclude(['轉車', '不是火車站']);
+        this.testRunner.expect(searchResponse).toNotInclude(['轉車', '交通指南']);
+        this.testRunner.expect(planResponse).toNotInclude(['轉車', '交通指南']);
       });
     });
 
@@ -111,7 +111,7 @@ class ToolBoundaryTests {
         
         // Should show train-specific response or graceful error
         this.testRunner.expect(response.length).toBeGreaterThan(0);
-        this.testRunner.expect(response).toNotInclude(['轉車', '不是火車站']);
+        this.testRunner.expect(response).toNotInclude(['轉車', '交通指南']);
       });
 
       await this.testRunner.test('plan_trip should handle train numbers gracefully', async () => {

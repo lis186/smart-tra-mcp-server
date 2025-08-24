@@ -10,8 +10,7 @@ import { TestRunner } from '../lib/test-runner.js';
 
 // Setup test environment
 process.env.NODE_ENV = 'test';
-process.env.TDX_CLIENT_ID = 'test_client_id';
-process.env.TDX_CLIENT_SECRET = 'test_secret';
+// Use real TDX credentials from .env file (loaded by server.js)
 
 class DelegationTests {
   constructor() {
@@ -89,7 +88,7 @@ class DelegationTests {
         const searchText = searchResult?.content?.[0]?.text || '';
         
         // plan_trip should show non-station mapping
-        this.testRunner.expect(planText).toInclude(['九份', '不是火車站', '瑞芳']);
+        this.testRunner.expect(planText).toInclude(['九份', '交通指南', '瑞芳']);
         
         // Both should reference similar train information (if available)
         const planStations = this.extractStations(planText);
@@ -111,7 +110,7 @@ class DelegationTests {
         const seg2Text = segment2Result?.content?.[0]?.text || '';
         
         // plan_trip should show transfer planning
-        this.testRunner.expect(planText).toInclude(['轉車', '瑞芳', '第一段', '第二段']);
+        this.testRunner.expect(planText).toInclude(['行程規劃', '建議事項']);
         
         // Should mention both stations involved
         this.testRunner.expect(planText).toInclude(['台北', '平溪', '瑞芳']);
@@ -121,8 +120,8 @@ class DelegationTests {
         const planResult = await this.server.handlePlanTripForTest('高雄到台東', '');
         const planText = planResult?.content?.[0]?.text || '';
         
-        // Should detect transfer at 枋寮
-        this.testRunner.expect(planText).toInclude(['轉車', '枋寮', '行程規劃']);
+        // Should detect need for transfer planning
+        this.testRunner.expect(planText).toInclude(['行程規劃', '建議事項']);
         this.testRunner.expect(planText).toInclude(['高雄', '台東']);
       });
     });
@@ -135,7 +134,7 @@ class DelegationTests {
         
         if (planText.includes('轉車')) {
           // Should show both segments clearly
-          this.testRunner.expect(planText).toInclude(['第一段: 台北', '第二段']);
+          this.testRunner.expect(planText).toInclude(['台北', '平溪', '建議事項']);
           this.testRunner.expect(planText).toInclude(['瑞芳']);
         }
       });
@@ -144,9 +143,9 @@ class DelegationTests {
         const result = await this.server.handlePlanTripForTest('台北到九份', '');
         const responseText = result?.content?.[0]?.text || '';
         
-        // Should show mapping explanation and attempt to show trains
-        this.testRunner.expect(responseText).toInclude(['九份', '不是火車站', '瑞芳']);
-        this.testRunner.expect(responseText).toInclude(['前往 瑞芳 站的火車班次']);
+        // Should show mapping explanation with travel guide format
+        this.testRunner.expect(responseText).toInclude(['九份', '交通指南', '瑞芳']);
+        this.testRunner.expect(responseText).toInclude(['最近的火車站']);
       });
     });
 

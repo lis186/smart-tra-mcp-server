@@ -31,7 +31,8 @@
       "Bash(npm run test:parser:*)",
       "Bash(gh pr create:*)",
       "Bash(git fetch:*)",
-      "Bash(gh pr:*)"
+      "Bash(gh pr:*)",
+      "Bash(cp:*)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits"

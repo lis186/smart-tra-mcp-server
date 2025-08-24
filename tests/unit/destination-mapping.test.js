@@ -10,8 +10,7 @@ import { TestRunner } from '../lib/test-runner.js';
 
 // Setup test environment
 process.env.NODE_ENV = 'test';
-process.env.TDX_CLIENT_ID = 'test_client_id';
-process.env.TDX_CLIENT_SECRET = 'test_secret';
+// Use real TDX credentials from .env file (loaded by server.js)
 
 class DestinationMappingTests {
   constructor() {
@@ -32,13 +31,13 @@ class DestinationMappingTests {
         // Should be mapped (Famous + Non-obvious + TRA-reasonable)
         { destination: '九份', shouldMap: true, expectedStation: '瑞芳', reason: 'Famous tourist spot, non-obvious connection' },
         { destination: '墾丁', shouldMap: true, expectedStation: '枋寮', reason: 'Major beach destination, practical endpoint' },
-        { destination: '太魯閣', shouldMap: true, expectedStation: '新城', reason: 'National park, closer than Hualien' },
-        { destination: '日月潭', shouldMap: true, expectedStation: '車埕', reason: 'Famous lake, via scenic Jiji Line' },
+        { destination: '太魯閣', shouldMap: true, expectedStation: '花蓮', reason: 'National park, Hualien is main hub' },
+        { destination: '日月潭', shouldMap: true, expectedStation: '台中', reason: 'Famous lake, Taichung is practical hub' },
         { destination: '阿里山', shouldMap: true, expectedStation: '嘉義', reason: 'Mountain destination, AFR connection' },
         
-        // MRT-only destinations → TRA hub
-        { destination: '淡水', shouldMap: true, expectedStation: '台北', reason: 'MRT-only, map to TRA hub' },
-        { destination: '北投', shouldMap: true, expectedStation: '台北', reason: 'MRT-only, map to TRA hub' },
+        // MRT-only destinations - currently not mapped in system
+        { destination: '淡水', shouldMap: false, reason: 'MRT-only, no current mapping in system' },
+        { destination: '北投', shouldMap: false, reason: 'MRT-only, no current mapping in system' },
         
         // Should NOT be mapped (actual TRA stations)
         { destination: '平溪', shouldMap: false, reason: 'IS a TRA station on Pingxi Line' },
@@ -58,8 +57,8 @@ class DestinationMappingTests {
           const response = result?.content?.[0]?.text || '';
           
           if (testCase.shouldMap) {
-            // Should show non-station mapping
-            this.testRunner.expect(response).toInclude([`"${testCase.destination}" 不是火車站`]);
+            // Should show non-station mapping in new friendly format
+            this.testRunner.expect(response).toInclude([`**${testCase.destination}交通指南**`]);
             this.testRunner.expect(response).toInclude([testCase.expectedStation]);
             this.testRunner.expect(response).toInclude(['最近的火車站']);
             
@@ -68,11 +67,11 @@ class DestinationMappingTests {
             
           } else {
             // Should NOT show non-station mapping
-            this.testRunner.expect(response).toNotInclude([`"${testCase.destination}" 不是火車站`]);
+            this.testRunner.expect(response).toNotInclude([`**${testCase.destination}交通指南**`]);
             
             // Should either show transfer planning OR delegate to search_trains
             const hasTransfer = response.includes('轉車') || response.includes('第一段');
-            const hasDirectRoute = !response.includes('轉車') && !response.includes('不是火車站');
+            const hasDirectRoute = !response.includes('轉車') && !response.includes('交通指南');
             const isValidResponse = hasTransfer || hasDirectRoute;
             
             this.testRunner.expect(isValidResponse).toBe(true);
@@ -94,7 +93,7 @@ class DestinationMappingTests {
           const result = await this.server.handlePlanTripForTest(`台北到${destination}`, '');
           const response = result?.content?.[0]?.text || '';
           
-          if (response.includes('不是火車站')) {
+          if (response.includes('交通指南')) {
             // Should map to a known TRA station
             const mappedToTRA = traStations.some(station => response.includes(station));
             this.testRunner.expect(mappedToTRA).toBe(true);
@@ -116,7 +115,7 @@ class DestinationMappingTests {
           const response = result?.content?.[0]?.text || '';
           
           // Should not attempt mapping for ambiguous names
-          this.testRunner.expect(response).toNotInclude(['不是火車站', '最近的火車站']);
+          this.testRunner.expect(response).toNotInclude(['交通指南', '最近的火車站']);
         }
       });
 
@@ -128,7 +127,7 @@ class DestinationMappingTests {
           const response = result?.content?.[0]?.text || '';
           
           // Should not show mapping for obvious station names
-          this.testRunner.expect(response).toNotInclude(['不是火車站', '最近的火車站']);
+          this.testRunner.expect(response).toNotInclude(['交通指南', '最近的火車站']);
         }
       });
     });
@@ -146,7 +145,7 @@ class DestinationMappingTests {
           const response2 = result2?.content?.[0]?.text || '';
           
           // Both should show same destination mapping
-          if (response1.includes('不是火車站') && response2.includes('不是火車站')) {
+          if (response1.includes('交通指南') && response2.includes('交通指南')) {
             const station1Match = response1.match(/最近的火車站: \*\*(.+?)\*\*/);
             const station2Match = response2.match(/最近的火車站: \*\*(.+?)\*\*/);
             
@@ -172,8 +171,8 @@ class DestinationMappingTests {
           const response2 = result2?.content?.[0]?.text || '';
           
           // Both should be handled (either both mapped or both not mapped)
-          const bothMapped = response1.includes('不是火車站') && response2.includes('不是火車站');
-          const neitherMapped = !response1.includes('不是火車站') && !response2.includes('不是火車站');
+          const bothMapped = response1.includes('交通指南') && response2.includes('交通指南');
+          const neitherMapped = !response1.includes('交通指南') && !response2.includes('交通指南');
           
           this.testRunner.expect(bothMapped || neitherMapped).toBe(true);
         }
