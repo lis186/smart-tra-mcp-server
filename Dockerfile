@@ -31,6 +31,9 @@ RUN npm ci --only=production && npm cache clean --force
 # Copy built application from builder stage
 COPY --from=builder /app/dist ./dist
 
+# Copy data directory with fallback station data
+COPY --from=builder /app/data ./data
+
 # Create non-root user for security
 RUN useradd -r -u 1001 -g root nodeuser
 RUN chown -R 1001:root /app

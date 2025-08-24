@@ -31,12 +31,14 @@ An intelligent Taiwan Railway Administration (TRA) query server following the Mo
 ## 🏗️ Architecture
 
 ### MCP Design Philosophy
+
 - **Maximum 3 Tools**: Following Shopify Storefront MCP design
 - **User-Intent Naming**: Tools named by user goals, not technical functions
 - **Unified Parameters**: All tools use `query` (required) + `context` (optional)
 - **Business Value Focus**: Every tool solves real user problems
 
 ### Technology Stack
+
 - **Runtime**: Node.js 18+ with TypeScript 5.0+
 - **MCP SDK**: @modelcontextprotocol/sdk for protocol implementation
 - **APIs**: TDX Taiwan Railway v3 APIs with OAuth 2.0 authentication
@@ -46,6 +48,7 @@ An intelligent Taiwan Railway Administration (TRA) query server following the Mo
 ## 🚀 Getting Started
 
 ### Prerequisites
+
 - Node.js 18 or higher
 - TDX API credentials (register at [TDX](https://tdx.transportdata.tw/))
 
@@ -94,11 +97,12 @@ npm start
 
 ## 🚀 Deployment to Google Cloud Run
 
-### Prerequisites
+### Deployment Prerequisites
 
 Before deploying, ensure you have:
 
 1. **Google Cloud Account & Project**
+
    ```bash
    # Install Google Cloud CLI (if not already installed)
    # Visit: https://cloud.google.com/sdk/docs/install
@@ -109,6 +113,7 @@ Before deploying, ensure you have:
    ```
 
 2. **Enable Required APIs**
+
    ```bash
    gcloud services enable cloudbuild.googleapis.com
    gcloud services enable run.googleapis.com
@@ -116,7 +121,7 @@ Before deploying, ensure you have:
    ```
 
 3. **TDX API Credentials** (Required for functionality)
-   - Register at: https://tdx.transportdata.tw/
+   - Register at: <https://tdx.transportdata.tw/>
    - Create an application and get your `TDX_CLIENT_ID` and `TDX_CLIENT_SECRET`
 
 ### Method 1: Quick Deployment (Recommended)
@@ -138,6 +143,7 @@ gcloud run services update smart-tra-mcp-server \
 ```
 
 **What the script does:**
+
 - Builds container using Google Cloud Build
 - Deploys to Cloud Run with optimized settings
 - Configures memory (1GB), CPU (1 core), scaling (0-10 instances)
@@ -285,6 +291,7 @@ gcloud run services add-iam-policy-binding smart-tra-mcp-server \
 ### Monitoring & Maintenance
 
 #### Check Logs
+
 ```bash
 # View recent logs
 gcloud run services logs read smart-tra-mcp-server --region=asia-east1
@@ -294,6 +301,7 @@ gcloud run services logs tail smart-tra-mcp-server --region=asia-east1
 ```
 
 #### Update Service
+
 ```bash
 # Update environment variables
 gcloud run services update smart-tra-mcp-server \
@@ -312,6 +320,7 @@ gcloud run services update smart-tra-mcp-server \
 #### Common Issues
 
 1. **Build Fails**
+
    ```bash
    # Check build status
    gcloud builds list --limit=5
@@ -321,6 +330,7 @@ gcloud run services update smart-tra-mcp-server \
    ```
 
 2. **Service Won't Start**
+
    ```bash
    # Check service status
    gcloud run services describe smart-tra-mcp-server --region=asia-east1
@@ -330,6 +340,7 @@ gcloud run services update smart-tra-mcp-server \
    ```
 
 3. **TDX API Connection Issues**
+
    ```bash
    # Test your credentials locally first
    curl -X POST "https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token" \
@@ -338,6 +349,7 @@ gcloud run services update smart-tra-mcp-server \
    ```
 
 4. **Performance Issues**
+
    ```bash
    # Check current resource usage
    gcloud run services describe smart-tra-mcp-server \
@@ -356,6 +368,7 @@ Google Cloud Run charges only for actual usage:
 With `min-instances=0`, costs approach zero when not in use.
 
 **Cost-saving tips:**
+
 - Use `min-instances=0` for development
 - Set appropriate `max-instances` to control scaling
 - Monitor usage in Google Cloud Console
@@ -400,7 +413,8 @@ With `min-instances=0`, costs approach zero when not in use.
 ### Response Features
 
 #### Real-time Status Display
-```
+
+```text
 🚄 車次 152 詳細資訊
 
 📊 即時狀態 (20:30 更新)
@@ -412,7 +426,8 @@ With `min-instances=0`, costs approach zero when not in use.
 ```
 
 #### Adjusted Time Display
-```
+
+```text
 ⏰ 今日時刻表
 🚩 潮州       18:31發 (原定18:26)🟡 輕微誤點5分
    屏東       18:43到 (原定18:38) → 18:45發 (原定18:40) (2分)
@@ -424,7 +439,7 @@ With `min-instances=0`, costs approach zero when not in use.
 
 ### Project Structure
 
-```
+```text
 smart-tra-mcp-server/
 ├── src/                        # Source code
 │   ├── unified-server.ts       # Main server entry point (dual transport)
@@ -471,6 +486,7 @@ npm run test:e2e        # End-to-end tests
 ```
 
 **Current Test Results**: 96.4% success rate (54/56 tests passing)
+
 - ✅ Unit Tests: 35/35 (100%) - Core logic validation
 - ✅ Integration Tests: 9/9 (100%) - Tool boundary enforcement
 - ❌ Delegation Tests: 4/6 (67%) - Minor display format issues
@@ -481,6 +497,7 @@ npm run test:e2e        # End-to-end tests
 ### ✅ Production Ready - All Core Stages Complete
 
 **Stage 1-10.1**: All development stages completed
+
 - **✅ Stage 1-6**: Foundation through search_trains tool  
 - **✅ Stage 7**: HTTP transport & Google Cloud Run deployment
 - **✅ Stage 8**: Response size optimization (60-85% reduction)
@@ -488,6 +505,7 @@ npm run test:e2e        # End-to-end tests
 - **✅ Stage 10-10.1**: Complete TypeScript type safety
 
 ### 🎯 Current Capabilities
+
 - **All 3 MCP Tools**: search_trains, search_station, plan_trip
 - **Dual Transport**: STDIO (Claude Desktop) + HTTP (Cloud Run, web clients)
 - **Real-time Data**: Live train status with delay adjustments
@@ -495,6 +513,7 @@ npm run test:e2e        # End-to-end tests
 - **Comprehensive Testing**: 96.4% test success rate
 
 ### 🚀 Ready For
+
 - ✅ **Claude Desktop Integration** (STDIO transport)
 - ✅ **Google Cloud Run Deployment** (HTTP transport)
 - ✅ **Web Client Integration** (n8n, custom HTTP clients)
@@ -503,18 +522,21 @@ npm run test:e2e        # End-to-end tests
 ## 🎯 Key Achievements
 
 ### Technical
+
 - **Real TDX Integration**: Production API connectivity with OAuth 2.0
 - **MCP Protocol**: Full compliance with Model Context Protocol
 - **Type Safety**: Complete TypeScript implementation
 - **Error Handling**: Comprehensive error management and user guidance
 
 ### User Experience  
+
 - **Natural Language**: Intuitive query interface
 - **Real-time Data**: Live train positions and delays
 - **Visual Design**: Modern emoji system for status indication
 - **Delay Awareness**: Automatic time adjustments for accurate planning
 
 ### Performance
+
 - **Response Optimization**: Context-efficient responses for AI agents
 - **Caching Strategy**: Smart caching for frequently accessed data
 - **Rate Limiting**: Respectful API usage with proper throttling

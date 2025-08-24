@@ -33,6 +33,8 @@ gcloud run deploy ${SERVICE_NAME} \
   --timeout 300 \
   --concurrency 80 \
   --set-env-vars NODE_ENV=production \
+  --set-env-vars TDX_CLIENT_ID=lis186-f3b5a6e8-5d8c-4fe7 \
+  --set-env-vars TDX_CLIENT_SECRET=ed58c659-b6e7-4d5a-b44b-b0f1b7c72b3a \
   --project ${PROJECT_ID}
 
 echo "✅ Deployment complete!"
