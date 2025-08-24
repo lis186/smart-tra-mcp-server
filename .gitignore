@@ -18,5 +18,11 @@ test-server.js
 tdx-auth-test-results.json
 *-test-results.json
 
+# Backup and temporary files
+*backup*
+*original*
+*.bak
+*.tmp
+
 # Reference implementations (for learning only, not part of project)
 reference/
