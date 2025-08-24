@@ -32,7 +32,13 @@
       "Bash(gh pr create:*)",
       "Bash(git fetch:*)",
       "Bash(gh pr:*)",
-      "Bash(cp:*)"
+      "Bash(cp:*)",
+      "Bash(./deploy-cloudrun.sh:*)",
+      "Bash(docker build:*)",
+      "Bash(gcloud builds submit:*)",
+      "Bash(gcloud storage buckets create:*)",
+      "Bash(TDX_CLIENT_ID=test_client_id TDX_CLIENT_SECRET=test_secret npm test)",
+      "Bash(git rm:*)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits"
