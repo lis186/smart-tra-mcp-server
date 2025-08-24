@@ -200,6 +200,49 @@ class EdgeCaseTests {
         // Should handle without memory issues
         this.testRunner.expect(response.length).toBeGreaterThan(0);
       });
+
+      await this.testRunner.test('Should handle empty TDX API responses gracefully', async () => {
+        // Test with invalid/non-existent train number
+        const result = await this.server.handleSearchTrainsForTest('9999999', '');
+        const response = result?.content?.[0]?.text || '';
+        
+        // Should provide meaningful error message
+        this.testRunner.expect(response.length).toBeGreaterThan(0);
+        this.testRunner.expect(response).toInclude(['車次', '查詢', '失敗']);
+      });
+
+      await this.testRunner.test('Should handle rate limiting scenarios', async () => {
+        // Make multiple rapid requests to test rate limiting
+        const promises = [];
+        for (let i = 0; i < 10; i++) {
+          promises.push(this.server.handleSearchTrainsForTest(`台北到台中 ${i}`, ''));
+        }
+        
+        const results = await Promise.all(promises);
+        
+        // All requests should complete (may hit rate limits but shouldn't crash)
+        for (const result of results) {
+          const response = result?.content?.[0]?.text || '';
+          this.testRunner.expect(response.length).toBeGreaterThan(0);
+        }
+      });
+
+      await this.testRunner.test('Should handle complex emoji sequences', async () => {
+        const complexEmojis = [
+          '👨‍👩‍👧‍👦🚂台北到花蓮', // Family emoji + train
+          '🇹🇼🚄高雄到台北', // Flag + bullet train
+          '🌈🎯📍台中到嘉義', // Complex emoji sequence
+          '🔥💯⭐台南到屏東', // Multiple emojis
+        ];
+        
+        for (const emojiQuery of complexEmojis) {
+          const result = await this.server.handlePlanTripForTest(emojiQuery, '');
+          const response = result?.content?.[0]?.text || '';
+          
+          // Should extract station names despite emojis
+          this.testRunner.expect(response.length).toBeGreaterThan(0);
+        }
+      });
     });
 
     return this.testRunner.getResults();
