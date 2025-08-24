@@ -5,6 +5,7 @@ An intelligent Taiwan Railway Administration (TRA) query server following the Mo
 ## ✨ Features
 
 ### 🚄 **search_trains** - Intelligent Train Search ✅ Complete
+
 - **Natural Language Queries**: "明早8點台北到台中最快的自強號"
 - **Train Number Direct Search**: "152", "1234號列車" with smart completion
 - **Real-time Status**: Live train positions and delay information
@@ -13,13 +14,15 @@ An intelligent Taiwan Railway Administration (TRA) query server following the Mo
 - **Modern Transit Icons**: 🚈進站中 🚏停靠中 ➡️已離站
 - **Comprehensive Data**: Timetables, fares, and live status from TDX APIs
 
-### 🏢 **search_station** - Station Discovery ✅ Complete  
+### 🏢 **search_station** - Station Discovery ✅ Complete
+
 - **Fuzzy Matching**: Handles abbreviations and typos (北車 → 臺北)
 - **Confidence Scoring**: 0.0-1.0 confidence system with alternatives
 - **244 TRA Stations**: Complete station database with detailed information
 - **Smart Suggestions**: Multiple candidate matches for ambiguous queries
 
 ### 🗺️ **plan_trip** - Trip Planning ✅ Complete
+
 - **Journey Planning**: Multi-segment routes with transfers
 - **Non-station Destinations**: Tourist spot mapping (九份→瑞芳, 墾丁→枋寮)
 - **Branch Line Support**: Pingxi, Jiji, Neiwan line transfers
@@ -91,36 +94,272 @@ npm start
 
 ## 🚀 Deployment to Google Cloud Run
 
-### Quick Deployment
+### Prerequisites
+
+Before deploying, ensure you have:
+
+1. **Google Cloud Account & Project**
+   ```bash
+   # Install Google Cloud CLI (if not already installed)
+   # Visit: https://cloud.google.com/sdk/docs/install
+   
+   # Login and set your project
+   gcloud auth login
+   gcloud config set project YOUR-PROJECT-ID
+   ```
+
+2. **Enable Required APIs**
+   ```bash
+   gcloud services enable cloudbuild.googleapis.com
+   gcloud services enable run.googleapis.com
+   gcloud services enable containerregistry.googleapis.com
+   ```
+
+3. **TDX API Credentials** (Required for functionality)
+   - Register at: https://tdx.transportdata.tw/
+   - Create an application and get your `TDX_CLIENT_ID` and `TDX_CLIENT_SECRET`
+
+### Method 1: Quick Deployment (Recommended)
+
+Use the provided deployment script for fastest setup:
+
 ```bash
-# Deploy with automatic setup
+# 1. Make deployment script executable (already done in repo)
+chmod +x deploy-cloudrun.sh
+
+# 2. Deploy with your project ID and region
 ./deploy-cloudrun.sh YOUR-PROJECT-ID asia-east1
 
-# Set TDX credentials after deployment  
+# 3. Set TDX credentials after deployment
 gcloud run services update smart-tra-mcp-server \
-  --set-env-vars TDX_CLIENT_ID=your_client_id \
-  --set-env-vars TDX_CLIENT_SECRET=your_client_secret \
+  --set-env-vars TDX_CLIENT_ID=your_actual_client_id \
+  --set-env-vars TDX_CLIENT_SECRET=your_actual_client_secret \
   --region asia-east1
 ```
 
-### Manual Deployment
+**What the script does:**
+- Builds container using Google Cloud Build
+- Deploys to Cloud Run with optimized settings
+- Configures memory (1GB), CPU (1 core), scaling (0-10 instances)
+- Sets up health checks and production environment
+- Outputs service URL and test endpoints
+
+### Method 2: Step-by-Step Manual Deployment
+
+For full control over the deployment process:
+
 ```bash
-# Build and push container
+# 1. Build and push container to Google Container Registry
+echo "Building container..."
 gcloud builds submit --tag gcr.io/YOUR-PROJECT-ID/smart-tra-mcp-server
 
-# Deploy to Cloud Run
+# 2. Deploy to Cloud Run with full configuration
+echo "Deploying to Cloud Run..."
 gcloud run deploy smart-tra-mcp-server \
   --image gcr.io/YOUR-PROJECT-ID/smart-tra-mcp-server \
   --platform managed \
   --region asia-east1 \
   --allow-unauthenticated \
   --port 8080 \
-  --set-env-vars NODE_ENV=production
+  --memory 1Gi \
+  --cpu 1 \
+  --min-instances 0 \
+  --max-instances 10 \
+  --timeout 300 \
+  --concurrency 80 \
+  --set-env-vars NODE_ENV=production \
+  --set-env-vars TDX_CLIENT_ID=your_actual_client_id \
+  --set-env-vars TDX_CLIENT_SECRET=your_actual_client_secret
+
+# 3. Get the service URL
+SERVICE_URL=$(gcloud run services describe smart-tra-mcp-server \
+  --platform managed \
+  --region asia-east1 \
+  --format 'value(status.url)')
+
+echo "Service deployed at: $SERVICE_URL"
 ```
 
-Your service will be available at:
-- **Health Check**: `https://your-service-url/health`
-- **MCP Endpoint**: `https://your-service-url/mcp`
+### Method 3: Using YAML Configuration
+
+For infrastructure-as-code deployment:
+
+```bash
+# 1. Update the YAML file with your project ID
+sed -i 's/PROJECT_ID/YOUR-PROJECT-ID/g' cloudrun-service.yaml
+
+# 2. Build container
+gcloud builds submit --tag gcr.io/YOUR-PROJECT-ID/smart-tra-mcp-server
+
+# 3. Deploy using YAML configuration
+gcloud run services replace cloudrun-service.yaml --region=asia-east1
+
+# 4. Set credentials (YAML doesn't include secrets for security)
+gcloud run services update smart-tra-mcp-server \
+  --set-env-vars TDX_CLIENT_ID=your_actual_client_id \
+  --set-env-vars TDX_CLIENT_SECRET=your_actual_client_secret \
+  --region asia-east1
+```
+
+### Environment Configuration
+
+#### Required Environment Variables
+
+```bash
+NODE_ENV=production          # Automatically set for Cloud Run
+PORT=8080                   # Automatically set by Cloud Run
+TDX_CLIENT_ID=your_id       # Set during deployment
+TDX_CLIENT_SECRET=your_secret # Set during deployment
+```
+
+#### Optional Environment Variables
+
+```bash
+HOST=0.0.0.0               # Default for Cloud Run
+GOOGLE_CLOUD_PROJECT=...   # Auto-detected in Cloud Run
+```
+
+### Verification & Testing
+
+After deployment, verify your service is working:
+
+```bash
+# Get your service URL
+SERVICE_URL=$(gcloud run services describe smart-tra-mcp-server \
+  --platform managed \
+  --region asia-east1 \
+  --format 'value(status.url)')
+
+# Test health endpoint
+curl "${SERVICE_URL}/health"
+# Expected: {"status":"healthy","timestamp":"...","service":"smart-tra-mcp-server"...}
+
+# Test root endpoint (shows available tools)
+curl "${SERVICE_URL}/"
+
+# Test with actual MCP client
+# Your service is now ready for HTTP-based MCP clients like n8n
+```
+
+### Service Endpoints
+
+Your deployed service will be available at:
+
+- **Health Check**: `https://your-service-url/health` - For monitoring and load balancer checks
+- **MCP Endpoint**: `https://your-service-url/mcp` - For HTTP-based MCP clients (n8n, web apps)
+- **Service Info**: `https://your-service-url/` - Shows available tools and configuration
+
+### Security Best Practices
+
+#### 1. Use Secret Manager (Recommended for Production)
+
+```bash
+# Store credentials securely in Google Secret Manager
+echo -n "your_actual_client_id" | gcloud secrets create tdx-client-id --data-file=-
+echo -n "your_actual_client_secret" | gcloud secrets create tdx-client-secret --data-file=-
+
+# Update service to use secrets instead of environment variables
+gcloud run services update smart-tra-mcp-server \
+  --remove-env-vars TDX_CLIENT_ID,TDX_CLIENT_SECRET \
+  --set-secrets TDX_CLIENT_ID=tdx-client-id:latest \
+  --set-secrets TDX_CLIENT_SECRET=tdx-client-secret:latest \
+  --region asia-east1
+```
+
+#### 2. Restrict Access (Optional)
+
+```bash
+# Remove public access (requires authentication)
+gcloud run services remove-iam-policy-binding smart-tra-mcp-server \
+  --member="allUsers" \
+  --role="roles/run.invoker" \
+  --region=asia-east1
+
+# Allow specific users
+gcloud run services add-iam-policy-binding smart-tra-mcp-server \
+  --member="user:yourname@example.com" \
+  --role="roles/run.invoker" \
+  --region=asia-east1
+```
+
+### Monitoring & Maintenance
+
+#### Check Logs
+```bash
+# View recent logs
+gcloud run services logs read smart-tra-mcp-server --region=asia-east1
+
+# Tail logs in real-time
+gcloud run services logs tail smart-tra-mcp-server --region=asia-east1
+```
+
+#### Update Service
+```bash
+# Update environment variables
+gcloud run services update smart-tra-mcp-server \
+  --set-env-vars NEW_VAR=value \
+  --region asia-east1
+
+# Update resource allocation
+gcloud run services update smart-tra-mcp-server \
+  --memory 2Gi \
+  --cpu 2 \
+  --region asia-east1
+```
+
+### Troubleshooting
+
+#### Common Issues
+
+1. **Build Fails**
+   ```bash
+   # Check build status
+   gcloud builds list --limit=5
+   
+   # View specific build logs
+   gcloud builds log BUILD-ID
+   ```
+
+2. **Service Won't Start**
+   ```bash
+   # Check service status
+   gcloud run services describe smart-tra-mcp-server --region=asia-east1
+   
+   # Check recent logs
+   gcloud run services logs read smart-tra-mcp-server --region=asia-east1 --limit=50
+   ```
+
+3. **TDX API Connection Issues**
+   ```bash
+   # Test your credentials locally first
+   curl -X POST "https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token" \
+     -H "Content-Type: application/x-www-form-urlencoded" \
+     -d "grant_type=client_credentials&client_id=YOUR_CLIENT_ID&client_secret=YOUR_CLIENT_SECRET"
+   ```
+
+4. **Performance Issues**
+   ```bash
+   # Check current resource usage
+   gcloud run services describe smart-tra-mcp-server \
+     --region=asia-east1 \
+     --format="value(spec.template.spec.containers[0].resources)"
+   ```
+
+### Cost Optimization
+
+Google Cloud Run charges only for actual usage:
+
+- **CPU/Memory**: Only while handling requests
+- **Requests**: $0.40 per million requests
+- **Networking**: Minimal for typical usage
+
+With `min-instances=0`, costs approach zero when not in use.
+
+**Cost-saving tips:**
+- Use `min-instances=0` for development
+- Set appropriate `max-instances` to control scaling
+- Monitor usage in Google Cloud Console
+- Consider `min-instances=1` only for production with consistent traffic
 
 ## 📖 Usage Examples
 
