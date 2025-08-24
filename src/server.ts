@@ -2974,10 +2974,13 @@ class SmartTRAServer {
 
   // Handle plan_trip tool request - Complete journey planning with transfers
   private async handlePlanTrip(query: string, context?: string): Promise<any> {
+    // Validate inputs at the beginning for error handling scope
+    let validatedQuery: string = query; // Initialize with original query as fallback
+    let validatedContext: string | undefined;
+    
     try {
-      // Validate inputs
-      const validatedQuery = this.validateApiInput(query, 'query', this.MAX_QUERY_LENGTH);
-      const validatedContext = context ? 
+      validatedQuery = this.validateApiInput(query, 'query', this.MAX_QUERY_LENGTH);
+      validatedContext = context ? 
         this.validateApiInput(context, 'context', this.MAX_CONTEXT_LENGTH) : 
         undefined;
       
@@ -3015,22 +3018,59 @@ class SmartTRAServer {
       const categorizedError = this.categorizeError(error);
       this.logError('plan_trip error', categorizedError);
       
-      return {
-        content: [{
-          type: 'text',
-          text: `❌ 無法規劃行程: ${categorizedError.message}\n\n` +
-                `請嘗試:\n` +
-                `• 確認站名正確 (使用 search_station 工具)\n` +
-                `• 指定明確的出發地和目的地\n` +
-                `• 如為觀光景點，我們會提供最近火車站的班次`
-        }]
-      };
+      // Enhanced error handling with specific error types
+      return this.createPlanTripErrorResponse(categorizedError, validatedQuery);
     }
+  }
+
+  // Input validation for destination queries
+  private validateDestinationQuery(destination: string): { isValid: boolean; error?: string } {
+    if (!destination || destination.trim().length === 0) {
+      return { isValid: false, error: '目的地不能為空' };
+    }
+
+    const trimmed = destination.trim();
+    
+    // Check minimum length
+    if (trimmed.length < 1) {
+      return { isValid: false, error: '目的地名稱過短' };
+    }
+
+    // Check maximum reasonable length
+    if (trimmed.length > 50) {
+      return { isValid: false, error: '目的地名稱過長' };
+    }
+
+    // Check for suspicious patterns (basic security)
+    if (trimmed.match(/[<>{}[\]\\\/\|`~]/)) {
+      return { isValid: false, error: '目的地包含無效字元' };
+    }
+
+    // Check for obviously invalid destinations
+    const invalidPatterns = [
+      /^\d+$/,  // Only numbers
+      /^[a-zA-Z\s]+$/, // Only English letters (for Chinese railway context)
+      /^[\s\-_.,!@#$%^&*()+=]+$/ // Only special characters
+    ];
+
+    for (const pattern of invalidPatterns) {
+      if (pattern.test(trimmed)) {
+        return { isValid: false, error: '目的地格式無效' };
+      }
+    }
+
+    return { isValid: true };
   }
 
   // Get nearest station for popular non-station destinations
   private getNearestStationForDestination(destination: string): { station: string; isNonStation: boolean; originalName: string } | null {
     if (!destination) return null;
+    
+    // Validate destination input
+    const validation = this.validateDestinationQuery(destination);
+    if (!validation.isValid) {
+      throw new Error(`Invalid destination: ${validation.error}`);
+    }
     
     // Mapping of popular NON-STATION destinations to nearest TRA stations
     // IMPORTANT: Only include places that are NOT TRA stations
@@ -3105,31 +3145,27 @@ class SmartTRAServer {
     });
   }
 
+  // Station-to-branch line mapping for O(1) lookup performance
+  private readonly stationToBranchLineMap: Record<string, string> = {
+    // 平溪線
+    '瑞芳': '平溪線', '十分': '平溪線', '平溪': '平溪線', '菁桐': '平溪線',
+    // 內灣線  
+    '竹東': '內灣線', '內灣': '內灣線', '六家': '內灣線',
+    // 集集線
+    '二水': '集集線', '集集': '集集線', '車埕': '集集線', '水里': '集集線',
+    // 沙崙線
+    '中洲': '沙崙線', '沙崙': '沙崙線', '長榮大學': '沙崙線',
+    // 深澳線
+    '海科館': '深澳線', '八斗子': '深澳線'
+  };
+
   // Check if transfer is required between two stations
   private async checkIfTransferRequired(origin: string, destination: string): Promise<boolean> {
     if (!origin || !destination) return false;
     
-    // Define branch lines and their connection points
-    const branchLines: Record<string, string[]> = {
-      '平溪線': ['瑞芳', '十分', '平溪', '菁桐'],
-      '內灣線': ['竹東', '內灣', '六家'],
-      '集集線': ['二水', '集集', '車埕', '水里'],
-      '沙崙線': ['中洲', '沙崙', '長榮大學'],
-      '深澳線': ['瑞芳', '海科館', '八斗子']
-    };
-    
-    // Check if stations are on different branch lines
-    let originBranch = null;
-    let destBranch = null;
-    
-    for (const [line, stations] of Object.entries(branchLines)) {
-      if (stations.some(s => s === origin || origin.includes(s))) {
-        originBranch = line;
-      }
-      if (stations.some(s => s === destination || destination.includes(s))) {
-        destBranch = line;
-      }
-    }
+    // O(1) lookup for branch line detection
+    const originBranch = this.findStationBranchLine(origin);
+    const destBranch = this.findStationBranchLine(destination);
     
     // If one is on branch line and other is not, or they're on different branch lines
     if ((originBranch && !destBranch) || (!originBranch && destBranch) || 
@@ -3163,6 +3199,92 @@ class SmartTRAServer {
     }
     
     return false;
+  }
+
+  // O(1) station-to-branch-line lookup
+  private findStationBranchLine(station: string): string | null {
+    // Direct exact match
+    if (this.stationToBranchLineMap[station]) {
+      return this.stationToBranchLineMap[station];
+    }
+    
+    // Partial match for stations that might include the name
+    for (const [stationKey, branchLine] of Object.entries(this.stationToBranchLineMap)) {
+      if (station.includes(stationKey) || stationKey.includes(station)) {
+        return branchLine;
+      }
+    }
+    
+    return null;
+  }
+
+  // Create specific error response for plan_trip failures
+  private createPlanTripErrorResponse(categorizedError: any, query: string): any {
+    let errorMessage = '';
+    let suggestions: string[] = [];
+
+    switch (categorizedError.category) {
+      case 'authentication':
+        errorMessage = '🔐 TDX API 認證問題';
+        suggestions = [
+          '• 請稍後再試，服務可能暫時無法使用',
+          '• 如問題持續，請聯繫系統管理員'
+        ];
+        break;
+
+      case 'network':
+        errorMessage = '🌐 網路連線問題';
+        suggestions = [
+          '• 請檢查網路連線',
+          '• 稍後再試，服務可能暫時無法使用'
+        ];
+        break;
+
+      case 'validation':
+        errorMessage = '📝 查詢格式錯誤';
+        suggestions = [
+          '• 確認站名正確 (使用 search_station 工具)',
+          '• 指定明確的出發地和目的地',
+          '• 例如: "台北到花蓮" 或 "明天早上台中到高雄"'
+        ];
+        break;
+
+      case 'data':
+        errorMessage = '📊 資料處理錯誤';
+        suggestions = [
+          '• 嘗試使用更明確的站名',
+          '• 如為觀光景點，我們會提供最近火車站的班次',
+          '• 使用 search_station 確認站名'
+        ];
+        break;
+
+      case 'rate_limit':
+        errorMessage = '⏱️ 請求過於頻繁';
+        suggestions = [
+          '• 請稍等片刻後再試',
+          '• 避免短時間內大量查詢'
+        ];
+        break;
+
+      default:
+        errorMessage = '❌ 行程規劃失敗';
+        suggestions = [
+          '• 確認站名正確 (使用 search_station 工具)',
+          '• 指定明確的出發地和目的地',
+          '• 如為觀光景點，我們會提供最近火車站的班次'
+        ];
+    }
+
+    const responseText = `${errorMessage}: ${categorizedError.message}\n\n` +
+                        `請嘗試:\n${suggestions.join('\n')}\n\n` +
+                        `💡 提示: 查詢 "${query}" 時發生問題`;
+
+    return {
+      content: [{
+        type: 'text',
+        text: responseText
+      }]
+    };
   }
 
   // Plan multi-segment journey with transfers
