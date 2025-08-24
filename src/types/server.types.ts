@@ -16,9 +16,3 @@ export interface CLIArgs {
   help?: boolean;
 }
 
-export interface MCPConnection {
-  id: string;
-  transport: any;
-  createdAt: Date;
-  lastActivity: Date;
-}

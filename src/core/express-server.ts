@@ -6,14 +6,12 @@ import {
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { SmartTRAServer } from '../server.js';
-import { ServerConfig, MCPConnection } from '../types/server.types.js';
+import { ServerConfig } from '../types/server.types.js';
 
 export class ExpressServer {
   private app: express.Application;
   private config: ServerConfig;
   private mcpServer: SmartTRAServer;
-  private mcpConnections: Map<string, MCPConnection> = new Map();
-  private connectionCleanupInterval: NodeJS.Timeout | undefined;
   private globalTransport: StreamableHTTPServerTransport | undefined;
   private globalServer: Server | undefined;
 
@@ -24,7 +22,6 @@ export class ExpressServer {
     
     this.setupMiddleware();
     this.setupRoutes();
-    this.startConnectionCleanup();
   }
 
   private setupMiddleware(): void {
@@ -179,15 +176,75 @@ export class ExpressServer {
   }
 
   private setupRoutes(): void {
-    // Health check endpoint for Cloud Run
-    this.app.get('/health', (req: Request, res: Response) => {
-      res.status(200).json({
-        status: 'healthy',
-        timestamp: new Date().toISOString(),
+    // Health check endpoint for Cloud Run with MCP transport monitoring
+    this.app.get('/health', async (req: Request, res: Response) => {
+      const timestamp = new Date().toISOString();
+      let overallStatus = 'healthy';
+      const checks: Record<string, any> = {};
+
+      // Check MCP transport health
+      try {
+        checks.mcpTransport = {
+          status: this.globalTransport ? 'ready' : 'not_initialized',
+          initialized: !!this.globalTransport,
+          serverReady: !!this.globalServer,
+        };
+        
+        // If transport isn't ready, try to initialize it
+        if (!this.globalTransport) {
+          await this.setupMCPTransport();
+          checks.mcpTransport.status = 'initialized_on_demand';
+          checks.mcpTransport.initialized = true;
+        }
+      } catch (error) {
+        checks.mcpTransport = {
+          status: 'error',
+          initialized: false,
+          error: error instanceof Error ? error.message : String(error)
+        };
+        overallStatus = 'degraded';
+      }
+
+      // Check system health
+      checks.system = {
+        uptime: process.uptime(),
+        memoryUsage: process.memoryUsage(),
+        nodeVersion: process.version,
+      };
+
+      // Check TDX client health (basic check)
+      try {
+        const clientId = process.env.TDX_CLIENT_ID;
+        checks.tdxClient = {
+          status: clientId ? 'configured' : 'not_configured',
+          mockMode: clientId === 'test_client_id' || process.env.USE_MOCK_DATA === 'true'
+        };
+      } catch (error) {
+        checks.tdxClient = {
+          status: 'error',
+          error: error instanceof Error ? error.message : String(error)
+        };
+        overallStatus = 'degraded';
+      }
+
+      const response = {
+        status: overallStatus,
+        timestamp,
         service: 'smart-tra-mcp-server',
         version: '1.0.0',
         environment: this.config.environment,
-      });
+        checks,
+        transport: {
+          mode: 'http',
+          endpoints: {
+            mcp: '/mcp',
+            health: '/health'
+          }
+        }
+      };
+
+      const statusCode = overallStatus === 'healthy' ? 200 : 503;
+      res.status(statusCode).json(response);
     });
 
     // Root endpoint
@@ -217,13 +274,65 @@ export class ExpressServer {
         await this.globalTransport!.handleRequest(req, res, req.body);
 
       } catch (error) {
-        console.error('Failed to handle MCP request', { method: req.method }, error instanceof Error ? error : new Error(String(error)));
+        const errorContext = {
+          method: req.method,
+          url: req.url,
+          headers: {
+            'content-type': req.get('content-type'),
+            'accept': req.get('accept'),
+            'origin': req.get('origin'),
+            'user-agent': req.get('user-agent')?.substring(0, 100), // Truncate for logs
+          },
+          bodySize: req.body ? JSON.stringify(req.body).length : 0,
+          transportInitialized: !!this.globalTransport,
+          serverInitialized: !!this.globalServer,
+          timestamp: new Date().toISOString(),
+        };
+
+        // Categorize MCP protocol errors for better debugging
+        let errorType = 'unknown';
+        let statusCode = 500;
+        
+        if (error instanceof Error) {
+          if (error.message.includes('stream is not readable')) {
+            errorType = 'transport_stream';
+            statusCode = 400;
+          } else if (error.message.includes('Parse error')) {
+            errorType = 'mcp_parse';
+            statusCode = 400;
+          } else if (error.message.includes('Invalid request')) {
+            errorType = 'mcp_validation';
+            statusCode = 400;
+          } else if (error.message.includes('timeout')) {
+            errorType = 'transport_timeout';
+            statusCode = 504;
+          } else {
+            errorType = 'server_internal';
+          }
+        }
+
+        console.error('MCP request failed', {
+          ...errorContext,
+          errorType,
+          errorMessage: error instanceof Error ? error.message : String(error),
+          errorStack: this.config.environment === 'development' && error instanceof Error ? error.stack : undefined
+        });
+
         if (!res.headersSent) {
-          res.status(500).json({
-            error: 'Failed to handle MCP request',
-            details: this.config.environment === 'development' 
+          res.status(statusCode).json({
+            error: `MCP ${errorType} error`,
+            message: this.config.environment === 'development' 
               ? error instanceof Error ? error.message : String(error)
               : 'Internal server error',
+            type: errorType,
+            timestamp: errorContext.timestamp,
+            ...(this.config.environment === 'development' && {
+              debug: {
+                transport: errorContext.transportInitialized ? 'ready' : 'not_initialized',
+                method: errorContext.method,
+                contentType: errorContext.headers['content-type']
+              }
+            })
           });
         }
       }
@@ -248,20 +357,6 @@ export class ExpressServer {
     });
   }
 
-  private startConnectionCleanup(): void {
-    // Clean up stale connections every 5 minutes
-    this.connectionCleanupInterval = setInterval(() => {
-      const now = new Date();
-      const staleThreshold = 30 * 60 * 1000; // 30 minutes
-
-      for (const [id, connection] of this.mcpConnections) {
-        if (now.getTime() - connection.lastActivity.getTime() > staleThreshold) {
-          console.error(`Cleaning up stale connection: ${id}`);
-          this.mcpConnections.delete(id);
-        }
-      }
-    }, 5 * 60 * 1000);
-  }
 
   async start(): Promise<void> {
     try {
@@ -290,10 +385,6 @@ export class ExpressServer {
   private async shutdown(server: any): Promise<void> {
     console.log('Shutting down Express server...');
     
-    if (this.connectionCleanupInterval) {
-      clearInterval(this.connectionCleanupInterval);
-    }
-
     server.close(() => {
       console.log('Express server stopped');
       process.exit(0);
