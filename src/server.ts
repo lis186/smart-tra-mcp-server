@@ -9,8 +9,17 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
   CallToolRequestSchema,
+  CallToolResult,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+
+// Type definitions
+import type { 
+  MCPToolResponse, 
+  MCPToolRequest,
+  StationMockData 
+} from './types/mcp.types.js';
+import type { NonStationDestination } from './types/common.types.js';
 
 // Core modules
 import { AuthManager } from './core/auth-manager.js';
@@ -67,14 +76,6 @@ const TIMEOUTS = {
   REQUEST_TIMEOUT: 30000,
   SHUTDOWN_WAIT: 1000
 };
-
-// Use the correct MCP response interface
-interface MCPToolResponse {
-  content: Array<{
-    type: 'text';
-    text: string;
-  }>;
-}
 
 /**
  * Main Smart TRA MCP Server class - NOW FULLY MODULAR
@@ -198,15 +199,14 @@ export class SmartTRAServer {
     });
 
     // Handle tool calls with consistent error handling  
-    // @ts-ignore - Temporary fix for MCP SDK type mismatch
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    this.server.setRequestHandler(CallToolRequestSchema, async (request: MCPToolRequest): Promise<CallToolResult> => {
       // Check if server is shutting down
       if (this.isShuttingDown) {
         throw new Error('Server is shutting down');
       }
 
       let name: string;
-      let args: Record<string, any>;
+      let args: Record<string, unknown>;
 
       try {
         const params = request.params;
@@ -535,7 +535,7 @@ export class SmartTRAServer {
    */
   private handleNonStationDestination(
     parsed: ParsedQuery, 
-    mapping: any, 
+    mapping: NonStationDestination, 
     query: string, 
     context?: string
   ): Promise<MCPToolResponse> {
@@ -609,7 +609,7 @@ export class SmartTRAServer {
 
   // ==================== TEST SUPPORT METHODS ====================
 
-  async loadStationDataForTest(mockData?: any[]): Promise<void> {
+  async loadStationDataForTest(mockData?: StationMockData[]): Promise<void> {
     if (mockData) {
       this.dataManager.loadMockData(mockData);
     } else {

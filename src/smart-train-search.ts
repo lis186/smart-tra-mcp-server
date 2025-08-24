@@ -188,7 +188,7 @@ export class SmartTrainSearchEngine {
    */
   private createTrainSuggestion(
     trainNumber: string, 
-    trainInfo: any, 
+    trainInfo: { route?: string; popularity?: string; tags?: string[] }, 
     confidence: number
   ): TrainSuggestion {
     const currentTime = new Date();
@@ -198,13 +198,13 @@ export class SmartTrainSearchEngine {
       trainNumber,
       trainType: this.getTrainTypeCode(trainNumber),
       trainTypeChinese: this.getTrainTypeChinese(trainNumber),
-      route: this.parseRoute(trainInfo.route),
+      route: this.parseRoute(trainInfo.route || ''),
       schedule: {
         departureTime: this.getDepartureTime(trainNumber),
         isToday: true,
         isUpcoming
       },
-      popularity: trainInfo.popularity,
+      popularity: trainInfo.popularity as 'hot' | 'normal' | 'rare',
       tags: trainInfo.tags || [],
       confidence
     };

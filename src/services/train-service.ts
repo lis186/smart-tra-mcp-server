@@ -6,6 +6,7 @@
 import { AuthManager } from '../core/auth-manager.js';
 import { ErrorHandler } from '../core/error-handler.js';
 import { TimeUtils } from '../utils/time-utils.js';
+import { TDXFareResponse } from '../types/tdx.types.js';
 
 // TDX API interfaces
 export interface TRATrainTimetable {
@@ -241,7 +242,7 @@ export class TrainService {
         throw new Error(`Fare API request failed: ${response.status} ${response.statusText}`);
       }
 
-      const fareData = await response.json();
+      const fareData = await response.json() as TDXFareResponse;
       return this.processFareData(fareData);
     } catch (error) {
       this.errorHandler.logError('Error fetching fare data', error, {
@@ -255,7 +256,7 @@ export class TrainService {
   /**
    * Process fare data from TDX API response
    */
-  private processFareData(fareResponse: any): FareInfo {
+  private processFareData(fareResponse: TDXFareResponse): FareInfo {
     // TDX v3 API fare response processing
     const fares = fareResponse.ODFares || fareResponse.Fares || [];
     

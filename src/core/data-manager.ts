@@ -5,6 +5,7 @@
 
 import { AuthManager } from './auth-manager.js';
 import { ErrorHandler, ErrorCategory } from './error-handler.js';
+import type { StationMockData } from '../types/mcp.types.js';
 
 export interface TRAStation {
   StationUID: string;
@@ -269,7 +270,7 @@ export class DataManager {
   /**
    * Cache live data for a station
    */
-  cacheLiveData(stationId: string, data: any[]): void {
+  cacheLiveData(stationId: string, data: Array<{ TrainNo: string; [key: string]: unknown }>): void {
     const expiresAt = Date.now() + CACHE_CONFIG.LIVE_DATA_CACHE_DURATION;
     this.liveDataCache.set(stationId, {
       data: data.map(item => [item.TrainNo, item]),
@@ -338,8 +339,8 @@ export class DataManager {
   /**
    * Load mock data for testing
    */
-  loadMockData(mockData: TRAStation[]): void {
-    this.stationData = mockData;
+  loadMockData(mockData: StationMockData[]): void {
+    this.stationData = mockData as TRAStation[];
     this.buildStationIndices();
     this.stationDataLoaded = true;
     this.stationLoadFailed = false;
