@@ -1,4 +1,4 @@
-import express, { Request, Response } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { 
@@ -186,22 +186,46 @@ export class ExpressServer {
       });
     });
 
-    // MCP endpoint - will be set up after transport initialization
-    this.app.post('/mcp', async (req: Request, res: Response) => {
-      if (!this.globalTransport) {
-        return res.status(500).json({ error: 'MCP transport not initialized' });
-      }
-
+    // Streamable HTTP endpoint for MCP - handles both GET (SSE stream) and POST (messages)
+    this.app.all('/mcp', async (req: Request, res: Response) => {
       try {
-        // Handle MCP over HTTP using StreamableHTTPServerTransport
-        await this.globalTransport.handleRequest(req, res);
+        if (!this.globalTransport) {
+          await this.setupMCPTransport();
+        }
+
+        // Let the StreamableHTTP transport handle the request
+        // It will automatically handle GET for SSE and POST for messages
+        await this.globalTransport!.handleRequest(req, res, req.body);
+
       } catch (error) {
-        console.error('MCP request error:', error);
-        res.status(500).json({ 
-          error: 'MCP request failed',
-          message: error instanceof Error ? error.message : 'Unknown error'
-        });
+        console.error('Failed to handle MCP request', { method: req.method }, error instanceof Error ? error : new Error(String(error)));
+        if (!res.headersSent) {
+          res.status(500).json({
+            error: 'Failed to handle MCP request',
+            details: this.config.environment === 'development' 
+              ? error instanceof Error ? error.message : String(error)
+              : 'Internal server error',
+          });
+        }
       }
+    });
+
+    // 404 handler
+    this.app.use('*', (req: Request, res: Response) => {
+      res.status(404).json({
+        error: 'Endpoint not found',
+        path: req.originalUrl,
+        availableEndpoints: ['/', '/health', '/mcp'],
+      });
+    });
+
+    // Error handler
+    this.app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+      console.error('Express server error', { path: req.path, method: req.method }, err);
+      res.status(500).json({
+        error: 'Internal server error',
+        details: this.config.environment === 'development' ? err.message : 'Something went wrong',
+      });
     });
   }
 
