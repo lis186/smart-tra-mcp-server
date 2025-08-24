@@ -1,0 +1,71 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: smart-tra-mcp-server
+  annotations:
+    run.googleapis.com/ingress: all
+    run.googleapis.com/execution-environment: gen2
+spec:
+  template:
+    metadata:
+      annotations:
+        # Cloud Run configuration
+        run.googleapis.com/cpu-throttling: "true"
+        run.googleapis.com/memory: "1Gi"
+        run.googleapis.com/cpu: "1"
+        run.googleapis.com/max-scale: "10"
+        run.googleapis.com/min-scale: "0"
+        
+        # Security
+        run.googleapis.com/sandbox: gvisor
+        
+        # Startup and health
+        run.googleapis.com/startup-cpu-boost: "true"
+    spec:
+      containerConcurrency: 80
+      timeoutSeconds: 300
+      containers:
+      - image: gcr.io/PROJECT_ID/smart-tra-mcp-server:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: NODE_ENV
+          value: production
+        - name: PORT
+          value: "8080"
+        - name: HOST  
+          value: "0.0.0.0"
+        # TDX API credentials should be set via Secret Manager
+        # - name: TDX_CLIENT_ID
+        #   valueFrom:
+        #     secretKeyRef:
+        #       name: tdx-credentials
+        #       key: client-id
+        # - name: TDX_CLIENT_SECRET
+        #   valueFrom:
+        #     secretKeyRef:
+        #       name: tdx-credentials  
+        #       key: client-secret
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+          requests:
+            cpu: 100m
+            memory: 256Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 2

@@ -1,0 +1,51 @@
+# Dependencies
+node_modules
+npm-debug.log*
+
+# Build outputs 
+dist
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.cursor
+
+# Test files
+tests
+*.test.js
+*.test.ts
+
+# Documentation
+README.md
+CHANGELOG.md
+docs/
+
+# Reference implementations
+reference/
+
+# Development files
+debug_*.js
+test_*.js
+quick-test.js
+check_*.js
+stage8-analysis.md
+specific-train-analysis.md
+train-number-query-design.md
+
+# Test results
+TEST_*.md
+test-results*.json
+
+# macOS
+.DS_Store
