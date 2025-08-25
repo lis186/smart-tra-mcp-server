@@ -10,13 +10,15 @@ import DelegationTests from './integration/delegation.test.js';
 import UserJourneyTests from './e2e/user-journeys.test.js';
 import DestinationMappingTests from './unit/destination-mapping.test.js';
 import EdgeCaseTests from './unit/edge-cases.test.js';
+import HTTPTransportTests from './http/http-test-suite.js';
 
 class TestSuiteRunner {
   constructor() {
     this.suites = [
       { name: 'Unit Tests', tests: [DestinationMappingTests, EdgeCaseTests] },
       { name: 'Integration Tests', tests: [ToolBoundaryTests, DelegationTests] },
-      { name: 'E2E Tests', tests: [UserJourneyTests] }
+      { name: 'E2E Tests', tests: [UserJourneyTests] },
+      { name: 'HTTP Transport Tests', tests: [HTTPTransportTests] }
     ];
     this.results = {
       totalSuites: 0,
@@ -126,6 +128,9 @@ class TestSuiteRunner {
     console.log('   • Tool boundary enforcement effectiveness');
     console.log('   • Transfer detection accuracy');
     console.log('   • User journey completion rates');
+    console.log('   • HTTP transport layer reliability');
+    console.log('   • CORS security policy enforcement');
+    console.log('   • MCP protocol over HTTP compliance');
 
     // Note about authentication
     if (this.results.failed > 0) {

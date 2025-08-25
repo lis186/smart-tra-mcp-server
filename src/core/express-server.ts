@@ -14,6 +14,17 @@ export class ExpressServer {
   private mcpServer: SmartTRAServer;
   private globalTransport: StreamableHTTPServerTransport | undefined;
   private globalServer: Server | undefined;
+  private httpServer: any; // HTTP server instance for proper cleanup
+
+  // Pre-compiled error patterns for efficient categorization
+  private static readonly ERROR_PATTERNS = [
+    { pattern: /stream is not readable/i, type: 'transport_stream', status: 400 },
+    { pattern: /parse error/i, type: 'mcp_parse', status: 400 },
+    { pattern: /invalid request/i, type: 'mcp_validation', status: 400 },
+    { pattern: /timeout/i, type: 'transport_timeout', status: 504 },
+  ] as const;
+
+  private static readonly DEFAULT_ERROR = { type: 'server_internal', status: 500 } as const;
 
   constructor(config: ServerConfig) {
     this.app = express();
@@ -274,66 +285,16 @@ export class ExpressServer {
         await this.globalTransport!.handleRequest(req, res, req.body);
 
       } catch (error) {
-        const errorContext = {
-          method: req.method,
-          url: req.url,
-          headers: {
-            'content-type': req.get('content-type'),
-            'accept': req.get('accept'),
-            'origin': req.get('origin'),
-            'user-agent': req.get('user-agent')?.substring(0, 100), // Truncate for logs
-          },
-          bodySize: req.body ? JSON.stringify(req.body).length : 0,
-          transportInitialized: !!this.globalTransport,
-          serverInitialized: !!this.globalServer,
-          timestamp: new Date().toISOString(),
-        };
-
-        // Categorize MCP protocol errors for better debugging
-        let errorType = 'unknown';
-        let statusCode = 500;
+        // Efficient error categorization using pre-compiled patterns
+        const { type: errorType, status: statusCode } = this.categorizeError(error);
         
-        if (error instanceof Error) {
-          if (error.message.includes('stream is not readable')) {
-            errorType = 'transport_stream';
-            statusCode = 400;
-          } else if (error.message.includes('Parse error')) {
-            errorType = 'mcp_parse';
-            statusCode = 400;
-          } else if (error.message.includes('Invalid request')) {
-            errorType = 'mcp_validation';
-            statusCode = 400;
-          } else if (error.message.includes('timeout')) {
-            errorType = 'transport_timeout';
-            statusCode = 504;
-          } else {
-            errorType = 'server_internal';
-          }
-        }
+        // Build optimized error context
+        const errorContext = this.buildErrorContext(req, error, errorType);
 
-        console.error('MCP request failed', {
-          ...errorContext,
-          errorType,
-          errorMessage: error instanceof Error ? error.message : String(error),
-          errorStack: this.config.environment === 'development' && error instanceof Error ? error.stack : undefined
-        });
+        console.error('MCP request failed', errorContext);
 
         if (!res.headersSent) {
-          res.status(statusCode).json({
-            error: `MCP ${errorType} error`,
-            message: this.config.environment === 'development' 
-              ? error instanceof Error ? error.message : String(error)
-              : 'Internal server error',
-            type: errorType,
-            timestamp: errorContext.timestamp,
-            ...(this.config.environment === 'development' && {
-              debug: {
-                transport: errorContext.transportInitialized ? 'ready' : 'not_initialized',
-                method: errorContext.method,
-                contentType: errorContext.headers['content-type']
-              }
-            })
-          });
+          this.sendErrorResponse(res, error, errorType, statusCode, errorContext.timestamp);
         }
       }
     });
@@ -363,8 +324,8 @@ export class ExpressServer {
       // Initialize MCP transport
       await this.setupMCPTransport();
 
-      // Start HTTP server
-      const server = this.app.listen(this.config.port, this.config.host, () => {
+      // Start HTTP server and store reference for cleanup
+      this.httpServer = this.app.listen(this.config.port, this.config.host, () => {
         console.log(`Smart TRA MCP Server running on http://${this.config.host}:${this.config.port}`);
         console.log(`Environment: ${this.config.environment}`);
         console.log('Available endpoints:');
@@ -372,9 +333,8 @@ export class ExpressServer {
         console.log(`  MCP endpoint: http://${this.config.host}:${this.config.port}/mcp`);
       });
 
-      // Graceful shutdown handling
-      process.on('SIGTERM', () => this.shutdown(server));
-      process.on('SIGINT', () => this.shutdown(server));
+      // Graceful shutdown handling - bind to instance to avoid multiple handlers
+      this.setupGracefulShutdown();
 
     } catch (error) {
       console.error('Failed to start Express server:', error);
@@ -382,12 +342,151 @@ export class ExpressServer {
     }
   }
 
-  private async shutdown(server: any): Promise<void> {
-    console.log('Shutting down Express server...');
+  /**
+   * Efficient error categorization using pre-compiled patterns
+   */
+  private categorizeError(error: unknown): { type: string; status: number } {
+    if (!(error instanceof Error)) {
+      return ExpressServer.DEFAULT_ERROR;
+    }
+
+    // Use pre-compiled patterns for efficient matching
+    for (const { pattern, type, status } of ExpressServer.ERROR_PATTERNS) {
+      if (pattern.test(error.message)) {
+        return { type, status };
+      }
+    }
     
-    server.close(() => {
-      console.log('Express server stopped');
+    return ExpressServer.DEFAULT_ERROR;
+  }
+
+  /**
+   * Build optimized error context - minimizes object creation and serialization
+   */
+  private buildErrorContext(req: Request, error: unknown, errorType: string): Record<string, any> {
+    const timestamp = new Date().toISOString();
+    const isDevelopment = this.config.environment === 'development';
+    
+    const context: Record<string, any> = {
+      method: req.method,
+      url: req.url,
+      errorType,
+      timestamp,
+      transportInitialized: !!this.globalTransport,
+      serverInitialized: !!this.globalServer,
+    };
+
+    // Add error details
+    if (error instanceof Error) {
+      context.errorMessage = error.message;
+      if (isDevelopment) {
+        context.errorStack = error.stack;
+      }
+    } else {
+      context.errorMessage = String(error);
+    }
+
+    // Add request details only in development or for specific error types
+    if (isDevelopment || errorType === 'mcp_parse') {
+      context.headers = {
+        'content-type': req.get('content-type'),
+        'origin': req.get('origin'),
+        'user-agent': req.get('user-agent')?.substring(0, 50), // Shorter truncation
+      };
+      
+      if (req.body) {
+        context.bodySize = typeof req.body === 'string' ? req.body.length : JSON.stringify(req.body).length;
+      }
+    }
+
+    return context;
+  }
+
+  /**
+   * Send optimized error response
+   */
+  private sendErrorResponse(res: Response, error: unknown, errorType: string, statusCode: number, timestamp: string): void {
+    const isDevelopment = this.config.environment === 'development';
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    
+    const response: Record<string, any> = {
+      error: `MCP ${errorType} error`,
+      type: errorType,
+      timestamp,
+      message: isDevelopment ? errorMessage : 'Internal server error'
+    };
+
+    // Add debug info only in development
+    if (isDevelopment) {
+      response.debug = {
+        transport: this.globalTransport ? 'ready' : 'not_initialized',
+        method: res.req.method,
+        contentType: res.req.get('content-type')
+      };
+    }
+
+    res.status(statusCode).json(response);
+  }
+
+  /**
+   * Setup graceful shutdown handlers (only once per instance)
+   */
+  private setupGracefulShutdown(): void {
+    const shutdownHandler = () => this.shutdown();
+    
+    // Remove any existing handlers to prevent accumulation
+    process.removeAllListeners('SIGTERM');
+    process.removeAllListeners('SIGINT');
+    
+    // Add fresh handlers
+    process.once('SIGTERM', shutdownHandler);
+    process.once('SIGINT', shutdownHandler);
+  }
+
+  /**
+   * Optimized shutdown with proper resource cleanup
+   */
+  private async shutdown(): Promise<void> {
+    console.log('Shutting down Express server gracefully...');
+    
+    try {
+      // Close MCP transport connections
+      if (this.globalTransport) {
+        // StreamableHTTPServerTransport doesn't have explicit close method
+        // but we can clean up references
+        this.globalTransport = undefined;
+      }
+
+      // Close MCP server
+      if (this.globalServer) {
+        // MCP Server doesn't have explicit close method in current version
+        // but we can clean up references  
+        this.globalServer = undefined;
+      }
+
+      // Close HTTP server
+      if (this.httpServer) {
+        await new Promise<void>((resolve) => {
+          this.httpServer.close(() => {
+            console.log('HTTP server closed');
+            resolve();
+          });
+        });
+      }
+
+      console.log('Express server stopped gracefully');
       process.exit(0);
-    });
+      
+    } catch (error) {
+      console.error('Error during shutdown:', error);
+      process.exit(1);
+    }
+  }
+
+  /**
+   * Add a stop method for programmatic shutdown (useful for testing)
+   */
+  async stop(): Promise<void> {
+    await this.shutdown();
   }
 }
