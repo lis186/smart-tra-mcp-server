@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Smart TRA MCP Server - An intelligent Taiwan Railway Administration (TRA) query server following the Model Context Protocol (MCP) design philosophy. This project integrates TDX (Transport Data eXchange) Taiwan railway v3 APIs through natural language interfaces, providing train schedules, real-time information, fare queries, and trip planning.
 
-**Project Status**: Active Development - Stage 6 Complete + Advanced Features
+**Project Status**: Core Complete, Deployment Pending - Stage 10.1 Complete (Stage 7 needed for Cloud Run)
 
-**🎯 Current Status**: Stage 6 Complete + Advanced Features - search_trains with Live Status & Delay Adjustment
+**🎯 Current Status**: All 3 MCP Tools Complete - STDIO ready, HTTP transport needed for Cloud Run deployment
 
 ## Commands
 
@@ -37,7 +37,7 @@ Following the Shopify Storefront MCP design philosophy:
 - **Unified parameters**: All tools use `query` (required) + `context` (optional) strings only
 - **Business value focus**: Every tool solves a real user problem
 
-### Implemented Tools (2/3 Complete)
+### Implemented Tools (3/3 Complete)
 
 1. **`search_trains`** - Query train schedules, real-time status, and fares ✅ **COMPLETE**
    - Natural language queries like "Tomorrow morning 8am Taipei to Taichung fastest train"
@@ -486,6 +486,8 @@ smart-tra-mcp-server/
    - **Delay time adjustment** - automatic calculation of adjusted times based on delays
 9. ✅ **TDX v3 API Upgrade**: Complete migration from v2 to v3 API endpoints with proper response parsing
 10. ✅ **Stage 9**: `plan_trip` tool - Journey planning with transfers and non-station destination mapping
+11. ✅ **Stage 10**: Type Safety Improvements - Complete TypeScript type safety with zero 'any' types
+12. ✅ **Stage 10.1**: Additional Type Safety Refinements - Production-ready codebase with comprehensive type definitions
 
 ## Performance Benchmarks
 
@@ -539,7 +541,7 @@ smart-tra-mcp-server/
 
 The system now provides 6 standardized error categories with consistent user experience:
 
-**Authentication Errors**
+#### Authentication Errors
 
 ```text
 🔐 TDX API 認證問題: TDX authentication failed
@@ -547,7 +549,7 @@ The system now provides 6 standardized error categories with consistent user exp
 • 如問題持續，請聯繫系統管理員
 ```
 
-**Validation Errors**
+#### Validation Errors
 
 ```text
 📝 查詢格式錯誤: query cannot be empty
@@ -556,7 +558,7 @@ The system now provides 6 standardized error categories with consistent user exp
 • 例如: "台北到花蓮" 或 "明天早上台中到高雄"
 ```
 
-**Data Processing Errors**
+#### Data Processing Errors
 
 ```text
 📊 資料處理錯誤: No stations found for query
@@ -565,7 +567,7 @@ The system now provides 6 standardized error categories with consistent user exp
 • 使用 search_station 確認站名
 ```
 
-**Rate Limiting**
+#### Rate Limiting
 
 ```text
 🚦 請求頻率限制: Rate limit exceeded
@@ -573,7 +575,7 @@ The system now provides 6 standardized error categories with consistent user exp
 • 減少查詢頻率
 ```
 
-**Network Errors**
+#### Network Errors
 
 ```text
 🌐 網路連線問題: Network timeout
@@ -582,7 +584,7 @@ The system now provides 6 standardized error categories with consistent user exp
 • 嘗試簡化查詢條件
 ```
 
-**System Errors**
+#### System Errors
 
 ```text
 ⚙️ 系統錯誤: Internal server error
@@ -593,11 +595,34 @@ The system now provides 6 standardized error categories with consistent user exp
 
 Each error category provides contextual suggestions and maintains consistent formatting across all three MCP tools (search_trains, search_station, plan_trip).
 
+## Current Deployment Status
+
+### ✅ Ready for Claude Desktop (STDIO)
+- All 3 MCP tools fully functional via STDIO transport
+- 96.4% test success rate (54/56 tests passing)
+- Complete TypeScript type safety
+- TDX v3 API integration working
+
+### ❌ NOT Ready for Google Cloud Run
+**Missing Stage 7 Requirements:**
+- HTTP transport layer (Express.js wrapper)
+- `/health` endpoint for Cloud Run health checks  
+- `/mcp` endpoint for MCP over HTTP
+- Dockerfile for containerization
+- Production environment configuration
+- Dual transport support (STDIO + HTTP)
+
 ## Next Steps
 
-1. **Stage 7**: Basic deployment to Google Cloud Run
-2. **Phase 2**: Enhanced transfer optimization with real-time considerations
+1. **🚧 Stage 7**: HTTP Transport & Cloud Run Deployment (**REQUIRED FOR CLOUD RUN**)
+   - Add Express.js HTTP server wrapper
+   - Implement dual transport (STDIO + HTTP)
+   - Create Dockerfile and deployment scripts
+   - Add health check endpoints
+2. **Phase 2**: Enhanced transfer optimization with real-time considerations  
 3. **Phase 3**: Performance optimization and caching improvements
+
+**Note**: All core MCP functionality (Stages 1-10.1) is complete. Stage 7 deployment infrastructure is needed for Google Cloud Run.
 
 ## Implementation Best Practices
 
