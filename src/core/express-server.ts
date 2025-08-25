@@ -39,23 +39,37 @@ export class ExpressServer {
     this.app.use(express.json());
     this.app.use(express.urlencoded({ extended: true }));
     
-    // CORS configuration
+    // CORS configuration with secure production defaults
     this.app.use((req, res, next) => {
       const allowedOrigins = process.env.ALLOWED_ORIGINS;
+      const origin = req.get('Origin');
       
       if (this.config.environment === 'development') {
         // Allow all origins in development
         res.header('Access-Control-Allow-Origin', '*');
-      } else if (allowedOrigins) {
-        // In production, only allow specified origins
-        const origins = allowedOrigins.split(',').map(o => o.trim());
-        const origin = req.get('Origin');
-        
-        if (origin && origins.includes(origin)) {
-          res.header('Access-Control-Allow-Origin', origin);
+      } else {
+        // Production: strict origin validation
+        if (allowedOrigins) {
+          const origins = allowedOrigins.split(',').map(o => o.trim());
+          if (origin && origins.includes(origin)) {
+            res.header('Access-Control-Allow-Origin', origin);
+          }
+        } else {
+          // Secure default: reject all CORS requests if no origins configured
+          // This prevents accidental wildcard exposure in production
+          console.error('CORS Warning: ALLOWED_ORIGINS not configured in production. CORS requests will be rejected.');
+          if (origin) {
+            // Don't set Access-Control-Allow-Origin header - browser will block the request
+            return res.status(403).json({
+              error: 'CORS policy violation',
+              message: 'Origin not allowed. Contact administrator to configure allowed origins.',
+              origin: origin
+            });
+          }
         }
       }
       
+      // Set other CORS headers
       res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
       res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
       res.header('Access-Control-Allow-Credentials', 'true');

@@ -12,7 +12,7 @@ import {
 } from '../lib/http-test-utils.js';
 import { ExpressServer } from '../../dist/core/express-server.js';
 
-const testRunner = new TestRunner();
+const testRunner = new TestRunner('CORS Security Tests');
 
 // Test configurations
 const developmentConfig = {
@@ -27,20 +27,21 @@ const productionConfig = {
   environment: 'production'
 };
 
-// Global test state
-let mockEnv;
-let serverManager;
+// Helper functions for setup/teardown
+async function setupTest() {
+  const mockEnv = new MockEnvironment();
+  const serverManager = new TestServerManager();
+  return { mockEnv, serverManager };
+}
 
-// Setup and teardown
-testRunner.beforeEach(() => {
-  mockEnv = new MockEnvironment();
-  serverManager = new TestServerManager();
-});
-
-testRunner.afterEach(async () => {
-  await serverManager.stopAllServers();
-  mockEnv.restore();
-});
+async function teardownTest(mockEnv, serverManager) {
+  if (serverManager) {
+    await serverManager.stopAllServers();
+  }
+  if (mockEnv) {
+    mockEnv.restore();
+  }
+}
 
 testRunner.suite('CORS Development Environment Tests', () => {
 
@@ -219,27 +220,39 @@ testRunner.suite('CORS Production Environment Tests', () => {
     }
   });
 
-  testRunner.test('Should handle missing ALLOWED_ORIGINS in production', async () => {
+  testRunner.test('Should reject CORS requests when ALLOWED_ORIGINS not configured (SECURITY FIX)', async () => {
     mockEnv.setEnv({
       NODE_ENV: 'production',
       TDX_CLIENT_ID: 'test_client_id',
       TDX_CLIENT_SECRET: 'test_secret',
-      // ALLOWED_ORIGINS not set
+      // ALLOWED_ORIGINS not set - this tests the security fix
     });
     
     const { client } = await serverManager.startServer('no-origins-server', ExpressServer, productionConfig);
     
-    // Without ALLOWED_ORIGINS, should not set CORS header
-    const response = await client.get('/health', {
+    // Same-origin requests (no Origin header) should work
+    const sameOriginResponse = await client.get('/health');
+    TestAssertions.assertStatus(sameOriginResponse, 200);
+    
+    // Cross-origin requests should be rejected with 403
+    const corsResponse = await client.get('/health', {
       headers: { 'Origin': 'https://any-domain.com' }
     });
     
-    TestAssertions.assertStatus(response, 200);
+    // This is the security fix - should return 403 instead of 200
+    TestAssertions.assertStatus(corsResponse, 403);
     
-    const corsOrigin = response.headers['access-control-allow-origin'];
-    if (corsOrigin === 'https://any-domain.com' || corsOrigin === '*') {
-      throw new Error('Should not allow origins when ALLOWED_ORIGINS not configured');
+    // Should include security error message
+    if (!corsResponse.body.error || !corsResponse.body.error.includes('CORS policy')) {
+      throw new Error('Should return CORS policy violation error');
     }
+    
+    // Should include the rejected origin for debugging
+    if (!corsResponse.body.origin || corsResponse.body.origin !== 'https://any-domain.com') {
+      throw new Error('Should include rejected origin in response');
+    }
+    
+    console.log('✅ SECURITY FIX VALIDATED: Production rejects CORS when ALLOWED_ORIGINS not configured');
   });
 });
 
