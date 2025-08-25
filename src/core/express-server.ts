@@ -15,6 +15,16 @@ export class ExpressServer {
   private globalTransport: StreamableHTTPServerTransport | undefined;
   private globalServer: Server | undefined;
   private httpServer: any; // HTTP server instance for proper cleanup
+  
+  // Connection state tracking for stateless mode optimization
+  private mcpInitialized: boolean = false;
+  private initializationPromise: Promise<void> | null = null;
+  private connectionMetrics = {
+    initializationCount: 0,
+    reuseCount: 0,
+    lastInitialized: 0,
+    averageInitTime: 0
+  };
 
   // Pre-compiled error patterns for efficient categorization
   private static readonly ERROR_PATTERNS = [
@@ -25,6 +35,16 @@ export class ExpressServer {
   ] as const;
 
   private static readonly DEFAULT_ERROR = { type: 'server_internal', status: 500 } as const;
+  
+  // Pre-allocated error context objects for performance
+  private static readonly BASE_ERROR_CONTEXT = {
+    transportInitialized: false,
+    serverInitialized: false,
+  };
+  
+  // Error context object pool to reduce GC pressure
+  private errorContextPool: Record<string, any>[] = [];
+  private readonly MAX_POOL_SIZE = 10;
 
   constructor(config: ServerConfig) {
     this.app = express();
@@ -83,36 +103,83 @@ export class ExpressServer {
     });
   }
 
-  private async setupMCPTransport(): Promise<void> {
-    // Create a single StreamableHTTP transport for all connections
-    // Using stateless mode for Cloud Run compatibility
-    this.globalTransport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined, // Stateless mode for Cloud Run
-      enableJsonResponse: true,
-      // MCP spec requires Origin validation to prevent DNS rebinding
-      enableDnsRebindingProtection: true,
-    });
+  /**
+   * Optimized MCP connection management with lazy singleton pattern
+   * Safe to call multiple times - will reuse existing connections
+   */
+  private async ensureMCPReady(): Promise<void> {
+    // If already initialized, increment reuse count and return
+    if (this.mcpInitialized && this.globalTransport && this.globalServer) {
+      this.connectionMetrics.reuseCount++;
+      return;
+    }
 
-    // Create a single MCP server instance
-    this.globalServer = new Server(
-      {
-        name: 'smart-tra-mcp-server',
-        version: '1.0.0',
-      },
-      {
-        capabilities: {
-          tools: {},
-        },
-      }
-    );
+    // If initialization is already in progress, wait for it
+    if (this.initializationPromise) {
+      await this.initializationPromise;
+      this.connectionMetrics.reuseCount++;
+      return;
+    }
 
-    // Set up handlers using our existing MCP server logic
-    await this.setupMCPServerHandlers(this.globalServer);
+    // Start new initialization
+    this.initializationPromise = this.initializeMCP();
+    await this.initializationPromise;
+    this.initializationPromise = null;
+  }
 
-    // Connect the transport to the server
-    await this.globalServer.connect(this.globalTransport);
+  /**
+   * Internal MCP initialization - only called once per instance
+   */
+  private async initializeMCP(): Promise<void> {
+    const startTime = Date.now();
     
-    console.error('StreamableHTTP transport initialized in stateless mode');
+    try {
+      // Create a single StreamableHTTP transport for all connections
+      // Using stateless mode for Cloud Run compatibility
+      this.globalTransport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined, // Stateless mode for Cloud Run
+        enableJsonResponse: true,
+        // MCP spec requires Origin validation to prevent DNS rebinding
+        enableDnsRebindingProtection: true,
+      });
+
+      // Create a single MCP server instance
+      this.globalServer = new Server(
+        {
+          name: 'smart-tra-mcp-server',
+          version: '1.0.0',
+        },
+        {
+          capabilities: {
+            tools: {},
+          },
+        }
+      );
+
+      // Set up handlers using our existing MCP server logic
+      await this.setupMCPServerHandlers(this.globalServer);
+
+      // Connect the transport to the server
+      await this.globalServer.connect(this.globalTransport);
+      
+      // Update connection metrics
+      const initTime = Date.now() - startTime;
+      this.connectionMetrics.initializationCount++;
+      this.connectionMetrics.lastInitialized = Date.now();
+      this.connectionMetrics.averageInitTime = 
+        (this.connectionMetrics.averageInitTime * (this.connectionMetrics.initializationCount - 1) + initTime) 
+        / this.connectionMetrics.initializationCount;
+      
+      this.mcpInitialized = true;
+      console.error(`StreamableHTTP transport initialized in stateless mode (${initTime}ms)`);
+      
+    } catch (error) {
+      // Reset state on failure
+      this.mcpInitialized = false;
+      this.globalTransport = undefined;
+      this.globalServer = undefined;
+      throw error;
+    }
   }
 
   private async setupMCPServerHandlers(server: Server): Promise<void> {
@@ -215,9 +282,9 @@ export class ExpressServer {
           serverReady: !!this.globalServer,
         };
         
-        // If transport isn't ready, try to initialize it
-        if (!this.globalTransport) {
-          await this.setupMCPTransport();
+        // If transport isn't ready, ensure it's initialized
+        if (!this.mcpInitialized) {
+          await this.ensureMCPReady();
           checks.mcpTransport.status = 'initialized_on_demand';
           checks.mcpTransport.initialized = true;
         }
@@ -235,6 +302,18 @@ export class ExpressServer {
         uptime: process.uptime(),
         memoryUsage: process.memoryUsage(),
         nodeVersion: process.version,
+      };
+
+      // Add connection efficiency metrics
+      checks.connectionMetrics = {
+        initializationCount: this.connectionMetrics.initializationCount,
+        reuseCount: this.connectionMetrics.reuseCount,
+        averageInitTime: Math.round(this.connectionMetrics.averageInitTime * 100) / 100, // Round to 2 decimals
+        lastInitialized: this.connectionMetrics.lastInitialized,
+        efficiency: this.connectionMetrics.initializationCount > 0 
+          ? Math.round((this.connectionMetrics.reuseCount / (this.connectionMetrics.initializationCount + this.connectionMetrics.reuseCount)) * 100)
+          : 0,
+        errorContextPoolSize: this.errorContextPool.length
       };
 
       // Check TDX client health (basic check)
@@ -290,9 +369,8 @@ export class ExpressServer {
     // Streamable HTTP endpoint for MCP - handles both GET (SSE stream) and POST (messages)
     this.app.all('/mcp', async (req: Request, res: Response) => {
       try {
-        if (!this.globalTransport) {
-          await this.setupMCPTransport();
-        }
+        // Ensure MCP transport is ready (lazy initialization with reuse)
+        await this.ensureMCPReady();
 
         // Let the StreamableHTTP transport handle the request
         // It will automatically handle GET for SSE and POST for messages
@@ -302,7 +380,7 @@ export class ExpressServer {
         // Efficient error categorization using pre-compiled patterns
         const { type: errorType, status: statusCode } = this.categorizeError(error);
         
-        // Build optimized error context
+        // Build optimized error context with object pooling
         const errorContext = this.buildErrorContext(req, error, errorType);
 
         console.error('MCP request failed', errorContext);
@@ -310,6 +388,9 @@ export class ExpressServer {
         if (!res.headersSent) {
           this.sendErrorResponse(res, error, errorType, statusCode, errorContext.timestamp);
         }
+        
+        // Return context object to pool for reuse
+        this.returnErrorContextToPool(errorContext);
       }
     });
 
@@ -335,8 +416,8 @@ export class ExpressServer {
 
   async start(): Promise<void> {
     try {
-      // Initialize MCP transport
-      await this.setupMCPTransport();
+      // Initialize MCP transport with optimized lazy loading
+      await this.ensureMCPReady();
 
       // Start HTTP server and store reference for cleanup
       this.httpServer = this.app.listen(this.config.port, this.config.host, () => {
@@ -375,45 +456,94 @@ export class ExpressServer {
   }
 
   /**
-   * Build optimized error context - minimizes object creation and serialization
+   * Build optimized error context with object pooling and minimal allocations
    */
   private buildErrorContext(req: Request, error: unknown, errorType: string): Record<string, any> {
-    const timestamp = new Date().toISOString();
-    const isDevelopment = this.config.environment === 'development';
+    // Get context object from pool or create new one
+    const context = this.getErrorContextFromPool();
     
-    const context: Record<string, any> = {
-      method: req.method,
-      url: req.url,
-      errorType,
-      timestamp,
-      transportInitialized: !!this.globalTransport,
-      serverInitialized: !!this.globalServer,
-    };
+    // Reset and populate with current data
+    context.method = req.method;
+    context.url = req.url;
+    context.errorType = errorType;
+    context.timestamp = new Date().toISOString();
+    context.transportInitialized = this.mcpInitialized;
+    context.serverInitialized = !!this.globalServer;
 
-    // Add error details
+    // Add error details (optimized string handling)
     if (error instanceof Error) {
       context.errorMessage = error.message;
-      if (isDevelopment) {
+      if (this.config.environment === 'development') {
         context.errorStack = error.stack;
+      } else {
+        delete context.errorStack; // Remove if exists from pooled object
       }
     } else {
       context.errorMessage = String(error);
+      delete context.errorStack;
     }
 
-    // Add request details only in development or for specific error types
-    if (isDevelopment || errorType === 'mcp_parse') {
-      context.headers = {
-        'content-type': req.get('content-type'),
-        'origin': req.get('origin'),
-        'user-agent': req.get('user-agent')?.substring(0, 50), // Shorter truncation
-      };
-      
-      if (req.body) {
-        context.bodySize = typeof req.body === 'string' ? req.body.length : JSON.stringify(req.body).length;
+    // Add request details only when necessary (optimized conditions)
+    const needsDetailedContext = this.config.environment === 'development' || errorType === 'mcp_parse';
+    if (needsDetailedContext) {
+      // Reuse headers object if exists, otherwise create
+      if (!context.headers) {
+        context.headers = {};
       }
+      
+      context.headers['content-type'] = req.get('content-type') || null;
+      context.headers.origin = req.get('origin') || null;
+      
+      // Optimize user-agent truncation
+      const userAgent = req.get('user-agent');
+      context.headers['user-agent'] = userAgent ? userAgent.substring(0, 50) : null;
+      
+      // Optimize body size calculation
+      if (req.body) {
+        context.bodySize = typeof req.body === 'string' 
+          ? req.body.length 
+          : Buffer.byteLength(JSON.stringify(req.body), 'utf8');
+      } else {
+        delete context.bodySize;
+      }
+    } else {
+      // Clean up detailed context if not needed
+      delete context.headers;
+      delete context.bodySize;
     }
 
     return context;
+  }
+
+  /**
+   * Get error context object from pool or create new one
+   */
+  private getErrorContextFromPool(): Record<string, any> {
+    if (this.errorContextPool.length > 0) {
+      return this.errorContextPool.pop()!;
+    }
+    
+    // Create new object based on base template
+    return {
+      ...ExpressServer.BASE_ERROR_CONTEXT,
+      method: '',
+      url: '',
+      errorType: '',
+      timestamp: '',
+      errorMessage: ''
+    };
+  }
+
+  /**
+   * Return error context object to pool for reuse
+   */
+  private returnErrorContextToPool(context: Record<string, any>): void {
+    if (this.errorContextPool.length < this.MAX_POOL_SIZE) {
+      // Clear sensitive data before returning to pool
+      delete context.errorStack;
+      delete context.errorMessage;
+      this.errorContextPool.push(context);
+    }
   }
 
   /**
@@ -464,6 +594,10 @@ export class ExpressServer {
     console.log('Shutting down Express server gracefully...');
     
     try {
+      // Reset MCP initialization state
+      this.mcpInitialized = false;
+      this.initializationPromise = null;
+      
       // Close MCP transport connections
       if (this.globalTransport) {
         // StreamableHTTPServerTransport doesn't have explicit close method
@@ -478,6 +612,9 @@ export class ExpressServer {
         this.globalServer = undefined;
       }
 
+      // Clear error context pool
+      this.errorContextPool.length = 0;
+
       // Close HTTP server
       if (this.httpServer) {
         await new Promise<void>((resolve) => {
@@ -487,6 +624,17 @@ export class ExpressServer {
           });
         });
       }
+
+      // Log final connection metrics
+      console.log('Connection efficiency metrics:', {
+        totalOperations: this.connectionMetrics.initializationCount + this.connectionMetrics.reuseCount,
+        initializationCount: this.connectionMetrics.initializationCount,
+        reuseCount: this.connectionMetrics.reuseCount,
+        efficiency: this.connectionMetrics.initializationCount > 0 
+          ? `${Math.round((this.connectionMetrics.reuseCount / (this.connectionMetrics.initializationCount + this.connectionMetrics.reuseCount)) * 100)}%`
+          : '0%',
+        averageInitTime: `${Math.round(this.connectionMetrics.averageInitTime)}ms`
+      });
 
       console.log('Express server stopped gracefully');
       process.exit(0);
