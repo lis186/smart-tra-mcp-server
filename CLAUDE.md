@@ -616,6 +616,14 @@ Each error category provides contextual suggestions and maintains consistent for
 - ✅ Production environment configuration
 - ✅ Dual transport support (STDIO + HTTP)
 
+**🌐 Production Deployment:**
+- **Service URL**: https://smart-tra-mcp-server-542158270006.asia-east1.run.app
+- **Health Endpoint**: https://smart-tra-mcp-server-542158270006.asia-east1.run.app/health
+- **MCP Endpoint**: https://smart-tra-mcp-server-542158270006.asia-east1.run.app/mcp
+- **Status**: ✅ Live and operational
+- **Region**: Asia East 1 (Taiwan)
+- **All 3 MCP Tools**: search_trains, search_station, plan_trip fully functional
+
 ## Next Steps
 
 **🎉 ALL CORE STAGES COMPLETE (1-11 + Stage 7)**
