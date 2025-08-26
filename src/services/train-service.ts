@@ -7,7 +7,9 @@ import { AuthManager } from '../core/auth-manager.js';
 import { ErrorHandler } from '../core/error-handler.js';
 import { TimeUtils } from '../utils/time-utils.js';
 import { TDXFareResponse } from '../types/tdx.types.js';
-import { TrainSearchResult, FareInfo } from '../types/common.types.js';
+import { TrainSearchResult, FareInfo, TPASSRegion, TPASSEligibility } from '../types/common.types.js';
+import * as fs from 'fs';
+import * as path from 'path';
 
 // TDX API interfaces
 export interface TRATrainTimetable {
@@ -264,13 +266,22 @@ export class TrainService {
     trains: TrainSearchResult[], 
     originName: string, 
     destName: string,
+    originStationId?: string,
+    destinationStationId?: string,
     includeDetails: boolean = true
   ): string {
     if (trains.length === 0) {
       return `😔 No trains found between ${originName} and ${destName}`;
     }
 
-    let result = `🚄 **${originName} → ${destName}** (${trains.length} 班次)\n\n`;
+    // Check TPASS eligibility if station IDs provided
+    let tpassInfo = '';
+    if (originStationId && destinationStationId) {
+      const tpassEligibility = this.getTPASSRegion(originStationId, destinationStationId);
+      tpassInfo = `\n🎫 ${tpassEligibility.message}\n`;
+    }
+
+    let result = `🚄 **${originName} → ${destName}** (${trains.length} 班次)${tpassInfo}\n`;
 
     trains.forEach((train, index) => {
       const monthlyPass = train.isMonthlyPassEligible ? '💳' : '💰';
@@ -291,5 +302,60 @@ export class TrainService {
     }
 
     return result.trim();
+  }
+
+  /**
+   * Get TPASS region for a station pair
+   */
+  getTPASSRegion(originStationId: string, destinationStationId: string): TPASSEligibility {
+    try {
+      // Load TPASS region data
+      const tpassDataPath = path.join(process.cwd(), 'src', 'data', 'tpass-regions.json');
+      const tpassData: Record<string, TPASSRegion> = JSON.parse(fs.readFileSync(tpassDataPath, 'utf8'));
+
+      // Find which regions contain both stations
+      for (const [regionKey, region] of Object.entries(tpassData)) {
+        if (region.stations.includes(originStationId) && region.stations.includes(destinationStationId)) {
+          return {
+            isEligible: true,
+            region: regionKey,
+            regionName: region.name,
+            price: region.price,
+            message: `TPASS適用: ${region.name} ✅`
+          };
+        }
+      }
+
+      // Check if stations are in different regions
+      const originRegions = Object.entries(tpassData).filter(([_, region]) => 
+        region.stations.includes(originStationId)
+      );
+      const destRegions = Object.entries(tpassData).filter(([_, region]) => 
+        region.stations.includes(destinationStationId)
+      );
+
+      if (originRegions.length > 0 && destRegions.length > 0) {
+        return {
+          isEligible: false,
+          message: 'TPASS: 需跨區購票 ❌'
+        };
+      }
+
+      // Stations not in TPASS coverage
+      return {
+        isEligible: false,
+        message: 'TPASS: 不適用此路線'
+      };
+
+    } catch (error) {
+      this.errorHandler.logError('Error checking TPASS eligibility', error, {
+        originStationId,
+        destinationStationId
+      });
+      return {
+        isEligible: false,
+        message: 'TPASS: 資料載入錯誤'
+      };
+    }
   }
 }
