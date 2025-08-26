@@ -190,9 +190,18 @@ export class TrainService {
       const destinationSequence = destinationStop.StopSequence;
       const stops = Math.abs(destinationSequence - originSequence) - 1; // Exclude origin and destination
       
-      // Check TPASS monthly pass eligibility
+      // Check TPASS monthly pass eligibility (both train type AND regional restrictions)
       const restrictedTrainTypes: string[] = Object.values(TPASS_RESTRICTED_TRAIN_TYPES);
-      const isMonthlyPassEligible = !restrictedTrainTypes.includes(train.TrainInfo.TrainTypeCode);
+      const isTrainTypeEligible = !restrictedTrainTypes.includes(train.TrainInfo.TrainTypeCode);
+      
+      // Check TPASS regional eligibility if station IDs are available
+      let isRegionEligible = true;
+      if (originStationId && destinationStationId) {
+        const tpassEligibility = this.getTPASSRegion(originStationId, destinationStationId);
+        isRegionEligible = tpassEligibility.isEligible;
+      }
+      
+      const isMonthlyPassEligible = isTrainTypeEligible && isRegionEligible;
       
       results.push({
         trainNo: train.TrainInfo.TrainNo,
