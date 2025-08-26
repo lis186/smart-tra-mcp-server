@@ -39,8 +39,9 @@ export interface TDXTrainTimetableResponse {
 
 // Constants
 const TPASS_RESTRICTED_TRAIN_TYPES = {
-  TAROKO: '1',
-  PUYUMA: '2'
+  TAROKO: '1',        // 太魯閣號
+  PUYUMA: '2',        // 普悠瑪號
+  EMU3000: '11'       // 自強號EMU3000型電車
 };
 
 const HTTP_CONSTANTS = {
