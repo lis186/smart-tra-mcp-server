@@ -94,10 +94,8 @@ class TPASSRegionsTests {
         await this.testRunner.test(testCase.desc, async () => {
           const result = this.server.trainService.getTPASSRegion(testCase.origin, testCase.dest);
           
-          this.testRunner.assert(result.isEligible === false, 
-            `${testCase.desc} should NOT be TPASS eligible`);
-          this.testRunner.assert(result.message.includes('跨區購票'), 
-            `${testCase.desc} should show 跨區購票 message`);
+          this.testRunner.expect(result.isEligible).toBe(false);
+          this.testRunner.expect(result.message).toInclude('跨區購票');
         });
       }
     });
@@ -115,32 +113,27 @@ class TPASSRegionsTests {
         for (const [originId, destId] of testCases) {
           const result = this.server.trainService.getTPASSRegion(originId, destId);
           
-          this.testRunner.assert(result.isEligible === false, 
-            `${originId} → ${destId} should NOT be TPASS eligible`);
-          this.testRunner.assert(result.message.includes('不適用此路線'), 
-            `${originId} → ${destId} should show 不適用此路線 message`);
+          this.testRunner.expect(result.isEligible).toBe(false);
+          this.testRunner.expect(result.message).toInclude('不適用此路線');
         }
       });
 
       await this.testRunner.test('區域邊界案例', async () => {
         // Test boundary cases that should work correctly
         let result = this.server.trainService.getTPASSRegion('1100', '1200'); // 楊梅 → 新竹
-        this.testRunner.assert(result.isEligible === true, '楊梅 → 新竹 should be TPASS eligible');
-        this.testRunner.assert(result.regionName === '桃竹竹苗生活圈', 
-          '楊梅 → 新竹 should be in 桃竹竹苗生活圈');
+        this.testRunner.expect(result.isEligible).toBe(true);
+        this.testRunner.expect(result.regionName).toBe('桃竹竹苗生活圈');
         
         // Test overlapping coverage (苗栗 in multiple regions, should work)
         result = this.server.trainService.getTPASSRegion('2210', '3210'); // 苗栗 → 豐原  
-        this.testRunner.assert(result.isEligible === true, '苗栗 → 豐原 should be TPASS eligible');
-        this.testRunner.assert(result.regionName === '中彰投苗生活圈', 
-          '苗栗 → 豐原 should be in 中彰投苗生活圈');
+        this.testRunner.expect(result.isEligible).toBe(true);
+        this.testRunner.expect(result.regionName).toBe('中彰投苗生活圈');
       });
 
       await this.testRunner.test('相同車站查詢', async () => {
         const result = this.server.trainService.getTPASSRegion('1000', '1000'); // 台北 → 台北
-        this.testRunner.assert(result.isEligible === true, '相同車站應該顯示為 TPASS eligible');
-        this.testRunner.assert(result.regionName === '基北北桃生活圈', 
-          '台北 → 台北 should be in 基北北桃生活圈');
+        this.testRunner.expect(result.isEligible).toBe(true);
+        this.testRunner.expect(result.regionName).toBe('基北北桃生活圈');
       });
     });
 
@@ -148,9 +141,9 @@ class TPASSRegionsTests {
     await this.testRunner.describe('Business Logic and Data Validation', async () => {
       await this.testRunner.test('TPASS 區域價格資訊', async () => {
         const result = this.server.trainService.getTPASSRegion('1000', '1020'); // 台北 → 桃園
-        this.testRunner.assert(result.price !== undefined, 'TPASS price should be included');
-        this.testRunner.assert(typeof result.price === 'number', 'TPASS price should be a number');
-        this.testRunner.assert(result.price > 0, 'TPASS price should be positive');
+        this.testRunner.expect(result.price !== undefined).toBe(true);
+        this.testRunner.expect(typeof result.price).toBe('number');
+        this.testRunner.expect(result.price).toBeGreaterThan(0);
       });
 
       await this.testRunner.test('所有區域覆蓋驗證', async () => {
@@ -168,34 +161,26 @@ class TPASSRegionsTests {
         
         for (const [originId, destId, expectedRegion] of regionTestCases) {
           const result = this.server.trainService.getTPASSRegion(originId, destId);
-          this.testRunner.assert(result.isEligible === true, 
-            `${expectedRegion} should be accessible`);
-          this.testRunner.assert(result.regionName === expectedRegion, 
-            `Region should match ${expectedRegion}`);
+          this.testRunner.expect(result.isEligible).toBe(true);
+          this.testRunner.expect(result.regionName).toBe(expectedRegion);
         }
       });
 
       await this.testRunner.test('訊息格式一致性', async () => {
         // Eligible messages should have consistent format
         const eligibleResult = this.server.trainService.getTPASSRegion('1000', '1020');
-        this.testRunner.assert(eligibleResult.message.includes('TPASS適用'), 
-          'Eligible messages should start with TPASS適用');
-        this.testRunner.assert(eligibleResult.message.includes('✅'), 
-          'Eligible messages should include success emoji');
+        this.testRunner.expect(eligibleResult.message).toInclude('TPASS適用');
+        this.testRunner.expect(eligibleResult.message).toInclude('✅');
         
         // Cross-region messages should have consistent format  
         const crossRegionResult = this.server.trainService.getTPASSRegion('1000', '3300');
-        this.testRunner.assert(crossRegionResult.message.includes('TPASS:'), 
-          'Cross-region messages should start with TPASS:');
-        this.testRunner.assert(crossRegionResult.message.includes('❌'), 
-          'Cross-region messages should include error emoji');
+        this.testRunner.expect(crossRegionResult.message).toInclude('TPASS:');
+        this.testRunner.expect(crossRegionResult.message).toInclude('❌');
         
         // Not covered messages should have consistent format
         const notCoveredResult = this.server.trainService.getTPASSRegion('9999', '8888');
-        this.testRunner.assert(notCoveredResult.message.includes('TPASS:'), 
-          'Not covered messages should start with TPASS:');
-        this.testRunner.assert(!notCoveredResult.message.includes('✅'), 
-          'Not covered messages should not include success emoji');
+        this.testRunner.expect(notCoveredResult.message).toInclude('TPASS:');
+        this.testRunner.expect(notCoveredResult.message).toNotInclude('✅');
       });
     });
 
