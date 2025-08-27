@@ -92,7 +92,7 @@ export class TrainService {
         }
       }
       
-      console.log('TPASS data loaded successfully');
+      console.error('TPASS data loaded successfully');
     } catch (error) {
       console.error('Failed to load TPASS data:', error);
       TrainService.tpassData = {};
