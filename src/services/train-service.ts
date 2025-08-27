@@ -59,10 +59,46 @@ const MEMORY_CONSTANTS = {
 };
 
 export class TrainService {
+  // TPASS data caching for performance - loaded once at startup
+  private static tpassData: Record<string, TPASSRegion> | null = null;
+  private static stationToRegionsMap: Map<string, string[]> | null = null;
+
   constructor(
     private authManager: AuthManager,
     private errorHandler: ErrorHandler
-  ) {}
+  ) {
+    // Initialize TPASS data on first instantiation
+    if (TrainService.tpassData === null) {
+      TrainService.loadTPASSData();
+    }
+  }
+
+  /**
+   * Load TPASS data once at startup for performance
+   */
+  private static loadTPASSData(): void {
+    try {
+      const tpassDataPath = path.join(process.cwd(), 'src', 'data', 'tpass-regions.json');
+      TrainService.tpassData = JSON.parse(fs.readFileSync(tpassDataPath, 'utf8'));
+      
+      // Build O(1) lookup map: station ID → regions
+      TrainService.stationToRegionsMap = new Map<string, string[]>();
+      
+      for (const [regionKey, region] of Object.entries(TrainService.tpassData!)) {
+        for (const stationId of region.stations) {
+          const existingRegions = TrainService.stationToRegionsMap.get(stationId) || [];
+          existingRegions.push(regionKey);
+          TrainService.stationToRegionsMap.set(stationId, existingRegions);
+        }
+      }
+      
+      console.log('TPASS data loaded successfully');
+    } catch (error) {
+      console.error('Failed to load TPASS data:', error);
+      TrainService.tpassData = {};
+      TrainService.stationToRegionsMap = new Map();
+    }
+  }
 
   /**
    * Get daily train timetable between two stations
@@ -315,20 +351,26 @@ export class TrainService {
   }
 
   /**
-   * Get TPASS region for a station pair
+   * Get TPASS region for a station pair - optimized with O(1) lookups
    */
   getTPASSRegion(originStationId: string, destinationStationId: string): TPASSEligibility {
     try {
-      // Load TPASS region data
-      const tpassDataPath = path.join(process.cwd(), 'src', 'data', 'tpass-regions.json');
-      const tpassData: Record<string, TPASSRegion> = JSON.parse(fs.readFileSync(tpassDataPath, 'utf8'));
+      // Ensure TPASS data is loaded
+      if (!TrainService.tpassData || !TrainService.stationToRegionsMap) {
+        TrainService.loadTPASSData();
+      }
 
-      // Find which regions contain both stations
-      for (const [regionKey, region] of Object.entries(tpassData)) {
-        if (region.stations.includes(originStationId) && region.stations.includes(destinationStationId)) {
+      // O(1) lookup for station regions
+      const originRegions = TrainService.stationToRegionsMap!.get(originStationId) || [];
+      const destRegions = TrainService.stationToRegionsMap!.get(destinationStationId) || [];
+
+      // Check for common regions (same-region travel)
+      for (const originRegion of originRegions) {
+        if (destRegions.includes(originRegion)) {
+          const region = TrainService.tpassData![originRegion];
           return {
             isEligible: true,
-            region: regionKey,
+            region: originRegion,
             regionName: region.name,
             price: region.price,
             message: `TPASS適用: ${region.name} ✅`
@@ -336,14 +378,7 @@ export class TrainService {
         }
       }
 
-      // Check if stations are in different regions
-      const originRegions = Object.entries(tpassData).filter(([_, region]) => 
-        region.stations.includes(originStationId)
-      );
-      const destRegions = Object.entries(tpassData).filter(([_, region]) => 
-        region.stations.includes(destinationStationId)
-      );
-
+      // Cross-region travel (both stations in TPASS network but different regions)
       if (originRegions.length > 0 && destRegions.length > 0) {
         return {
           isEligible: false,
