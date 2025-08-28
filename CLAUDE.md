@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Smart TRA MCP Server - An intelligent Taiwan Railway Administration (TRA) query server following the Model Context Protocol (MCP) design philosophy. This project integrates TDX (Transport Data eXchange) Taiwan railway v3 APIs through natural language interfaces, providing train schedules, real-time information, fare queries, and trip planning.
 
-**Project Status**: Core Complete, Deployment Pending - Stage 10.1 Complete (Stage 7 needed for Cloud Run)
+**Project Status**: Production Ready - All Stages Complete (1-11 + Stage 7)
 
-**🎯 Current Status**: All 3 MCP Tools Complete - STDIO ready, HTTP transport needed for Cloud Run deployment
+**🎯 Current Status**: All 3 MCP Tools Complete - STDIO + HTTP transport ready, Cloud Run deployment ready
 
 ## Commands
 
@@ -488,6 +488,8 @@ smart-tra-mcp-server/
 10. ✅ **Stage 9**: `plan_trip` tool - Journey planning with transfers and non-station destination mapping
 11. ✅ **Stage 10**: Type Safety Improvements - Complete TypeScript type safety with zero 'any' types
 12. ✅ **Stage 10.1**: Additional Type Safety Refinements - Production-ready codebase with comprehensive type definitions
+13. ✅ **Stage 11**: TPASS Monthly Pass Support - Complete regional pass eligibility system with 100% test coverage
+14. ✅ **Stage 7**: HTTP Transport & Cloud Run Deployment - Dual transport (STDIO + HTTP) with production deployment
 
 ## Performance Benchmarks
 
@@ -599,30 +601,40 @@ Each error category provides contextual suggestions and maintains consistent for
 
 ### ✅ Ready for Claude Desktop (STDIO)
 - All 3 MCP tools fully functional via STDIO transport
-- 96.4% test success rate (54/56 tests passing)
+- 98.3% test success rate (59/60 tests passing) 
 - Complete TypeScript type safety
 - TDX v3 API integration working
+- ✅ TPASS monthly pass support (9 regions, 26 test scenarios, 100% test coverage)
+- ✅ EMU3000 train restriction properly implemented
 
-### ❌ NOT Ready for Google Cloud Run
-**Missing Stage 7 Requirements:**
-- HTTP transport layer (Express.js wrapper)
-- `/health` endpoint for Cloud Run health checks  
-- `/mcp` endpoint for MCP over HTTP
-- Dockerfile for containerization
-- Production environment configuration
-- Dual transport support (STDIO + HTTP)
+### ✅ Ready for Google Cloud Run (HTTP)
+**Stage 7 Complete:**
+- ✅ HTTP transport layer (Express.js wrapper)
+- ✅ `/health` endpoint for Cloud Run health checks  
+- ✅ `/mcp` endpoint for MCP over HTTP
+- ✅ Dockerfile for containerization
+- ✅ Production environment configuration
+- ✅ Dual transport support (STDIO + HTTP)
+
+**🌐 Production Deployment:**
+- **Service URL**: https://smart-tra-mcp-server-542158270006.asia-east1.run.app
+- **Health Endpoint**: https://smart-tra-mcp-server-542158270006.asia-east1.run.app/health
+- **MCP Endpoint**: https://smart-tra-mcp-server-542158270006.asia-east1.run.app/mcp
+- **Status**: ✅ Live and operational
+- **Region**: Asia East 1 (Taiwan)
+- **All 3 MCP Tools**: search_trains, search_station, plan_trip fully functional
 
 ## Next Steps
 
-1. **🚧 Stage 7**: HTTP Transport & Cloud Run Deployment (**REQUIRED FOR CLOUD RUN**)
-   - Add Express.js HTTP server wrapper
-   - Implement dual transport (STDIO + HTTP)
-   - Create Dockerfile and deployment scripts
-   - Add health check endpoints
-2. **Phase 2**: Enhanced transfer optimization with real-time considerations  
-3. **Phase 3**: Performance optimization and caching improvements
+**🎉 ALL CORE STAGES COMPLETE (1-11 + Stage 7)**
 
-**Note**: All core MCP functionality (Stages 1-10.1) is complete. Stage 7 deployment infrastructure is needed for Google Cloud Run.
+**Optional Future Enhancements:**
+1. **Phase 2**: Enhanced transfer optimization with real-time considerations  
+2. **Phase 3**: Performance optimization and caching improvements
+3. **Phase 4**: Advanced analytics and monitoring dashboards
+4. **Phase 5**: Multi-language support (English, Japanese)
+
+**Note**: All core MCP functionality and deployment infrastructure is complete. The system is production-ready for both Claude Desktop (STDIO) and Google Cloud Run (HTTP) deployment.
 
 ## Implementation Best Practices
 

@@ -122,3 +122,22 @@ export interface ApiRequestOptions {
   body?: string | URLSearchParams;
   timeout?: number;
 }
+
+/**
+ * TPASS Monthly Pass Types
+ */
+export interface TPASSRegion {
+  name: string;
+  fullName: string;
+  price: number;
+  url: string;
+  stations: string[];
+}
+
+export interface TPASSEligibility {
+  isEligible: boolean;
+  region?: string;
+  regionName?: string;
+  price?: number;
+  message: string;
+}

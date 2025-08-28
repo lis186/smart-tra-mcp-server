@@ -44,7 +44,7 @@ function parseArgs(): CLIArgs {
 }
 
 function showHelp(): void {
-  console.log(`
+  console.error(`
 Smart TRA MCP Server - Unified Transport
 
 Usage:
@@ -98,16 +98,16 @@ async function startHTTPServer(host: string, port: number): Promise<void> {
       environment: (process.env.NODE_ENV as 'development' | 'production') || 'development',
     };
 
-    console.log('Starting Smart TRA MCP Server in HTTP mode');
-    console.log(`Environment: ${config.environment}`);
-    console.log(`Host: ${config.host}`);
-    console.log(`Port: ${config.port}`);
+    console.error('Starting Smart TRA MCP Server in HTTP mode');
+    console.error(`Environment: ${config.environment}`);
+    console.error(`Host: ${config.host}`);
+    console.error(`Port: ${config.port}`);
 
     // Start Express server with Streamable HTTP transport
     const expressServer = new ExpressServer(config);
     await expressServer.start();
 
-    console.log('Smart TRA MCP Server started successfully in HTTP mode');
+    console.error('Smart TRA MCP Server started successfully in HTTP mode');
 
   } catch (error) {
     console.error('Failed to start HTTP MCP server:', error instanceof Error ? error.message : String(error));

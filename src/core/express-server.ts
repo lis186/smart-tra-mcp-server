@@ -421,11 +421,11 @@ export class ExpressServer {
 
       // Start HTTP server and store reference for cleanup
       this.httpServer = this.app.listen(this.config.port, this.config.host, () => {
-        console.log(`Smart TRA MCP Server running on http://${this.config.host}:${this.config.port}`);
-        console.log(`Environment: ${this.config.environment}`);
-        console.log('Available endpoints:');
-        console.log(`  Health check: http://${this.config.host}:${this.config.port}/health`);
-        console.log(`  MCP endpoint: http://${this.config.host}:${this.config.port}/mcp`);
+        console.error(`Smart TRA MCP Server running on http://${this.config.host}:${this.config.port}`);
+        console.error(`Environment: ${this.config.environment}`);
+        console.error('Available endpoints:');
+        console.error(`  Health check: http://${this.config.host}:${this.config.port}/health`);
+        console.error(`  MCP endpoint: http://${this.config.host}:${this.config.port}/mcp`);
       });
 
       // Graceful shutdown handling - bind to instance to avoid multiple handlers
@@ -591,7 +591,7 @@ export class ExpressServer {
    * Optimized shutdown with proper resource cleanup
    */
   private async shutdown(): Promise<void> {
-    console.log('Shutting down Express server gracefully...');
+    console.error('Shutting down Express server gracefully...');
     
     try {
       // Reset MCP initialization state
@@ -619,14 +619,14 @@ export class ExpressServer {
       if (this.httpServer) {
         await new Promise<void>((resolve) => {
           this.httpServer.close(() => {
-            console.log('HTTP server closed');
+            console.error('HTTP server closed');
             resolve();
           });
         });
       }
 
       // Log final connection metrics
-      console.log('Connection efficiency metrics:', {
+      console.error('Connection efficiency metrics:', {
         totalOperations: this.connectionMetrics.initializationCount + this.connectionMetrics.reuseCount,
         initializationCount: this.connectionMetrics.initializationCount,
         reuseCount: this.connectionMetrics.reuseCount,
@@ -636,7 +636,7 @@ export class ExpressServer {
         averageInitTime: `${Math.round(this.connectionMetrics.averageInitTime)}ms`
       });
 
-      console.log('Express server stopped gracefully');
+      console.error('Express server stopped gracefully');
       process.exit(0);
       
     } catch (error) {

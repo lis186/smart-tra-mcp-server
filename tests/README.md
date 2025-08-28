@@ -11,12 +11,16 @@ tests/
 ├── lib/
 │   └── test-runner.js      # Custom test framework (no external dependencies)
 ├── unit/
-│   └── destination-mapping.test.js    # Unit tests for mapping logic
+│   ├── destination-mapping.test.js    # Unit tests for mapping logic
+│   ├── edge-cases.test.js             # Edge case and boundary tests
+│   └── tpass-regions.test.js          # TPASS regional monthly pass tests
 ├── integration/
 │   ├── tool-boundaries.test.js        # Tool boundary enforcement tests  
 │   └── delegation.test.js             # Internal delegation tests
 ├── e2e/
 │   └── user-journeys.test.js          # End-to-end user workflow tests
+├── http/
+│   └── http-test-suite.js             # HTTP transport layer tests
 ├── run-all-tests.js        # Main test suite runner
 └── README.md              # This file
 ```
@@ -28,6 +32,18 @@ tests/
   - Famous tourist spots with non-obvious TRA connections
   - MRT-only destinations mapping to TRA hubs
   - Boundary cases and mapping consistency
+
+- **TPASS Regional Monthly Pass Tests**: Validate TPASS regional eligibility logic
+  - All 9 TPASS regions (基北北桃、桃竹竹苗、中彰投苗、雲林、嘉義、南高屏、北宜、花蓮、臺東)
+  - Same-region eligibility checking and messaging
+  - Cross-region detection with proper warnings
+  - Edge cases (invalid stations, boundaries, error handling)
+  - Business logic validation (pricing, region coverage, message consistency)
+
+- **Edge Case Tests**: Comprehensive boundary and error condition testing
+  - Unicode handling, malformed inputs, timeout scenarios
+  - Rate limiting behavior and recovery
+  - Concurrency edge cases
 
 #### Integration Tests
 - **Tool Boundary Tests**: Ensure proper separation between search_trains and plan_trip
@@ -93,11 +109,14 @@ TDX_CLIENT_SECRET=test_secret     # Test credentials
 
 ### What We Test
 - ✅ Destination mapping accuracy (three-criteria rule compliance)
+- ✅ TPASS regional monthly pass eligibility (all 9 regions)
 - ✅ Tool boundary enforcement (search_trains vs plan_trip)
 - ✅ Transfer detection for branch lines and cross-coast routes
 - ✅ Internal delegation correctness
 - ✅ User journey completion rates
 - ✅ Error recovery and guidance
+- ✅ HTTP transport layer and CORS security
+- ✅ MCP protocol over HTTP compliance
 
 ### What We Don't Test
 - ❌ TDX API availability (expected to fail in test environment)

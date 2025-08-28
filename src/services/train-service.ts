@@ -7,7 +7,9 @@ import { AuthManager } from '../core/auth-manager.js';
 import { ErrorHandler } from '../core/error-handler.js';
 import { TimeUtils } from '../utils/time-utils.js';
 import { TDXFareResponse } from '../types/tdx.types.js';
-import { TrainSearchResult, FareInfo } from '../types/common.types.js';
+import { TrainSearchResult, FareInfo, TPASSRegion, TPASSEligibility } from '../types/common.types.js';
+import * as fs from 'fs';
+import * as path from 'path';
 
 // TDX API interfaces
 export interface TRATrainTimetable {
@@ -37,8 +39,9 @@ export interface TDXTrainTimetableResponse {
 
 // Constants
 const TPASS_RESTRICTED_TRAIN_TYPES = {
-  TAROKO: '1',
-  PUYUMA: '2'
+  TAROKO: '1',        // 太魯閣號
+  PUYUMA: '2',        // 普悠瑪號
+  EMU3000: '11'       // 自強號EMU3000型電車
 };
 
 const HTTP_CONSTANTS = {
@@ -56,10 +59,46 @@ const MEMORY_CONSTANTS = {
 };
 
 export class TrainService {
+  // TPASS data caching for performance - loaded once at startup
+  private static tpassData: Record<string, TPASSRegion> | null = null;
+  private static stationToRegionsMap: Map<string, string[]> | null = null;
+
   constructor(
     private authManager: AuthManager,
     private errorHandler: ErrorHandler
-  ) {}
+  ) {
+    // Initialize TPASS data on first instantiation
+    if (TrainService.tpassData === null) {
+      TrainService.loadTPASSData();
+    }
+  }
+
+  /**
+   * Load TPASS data once at startup for performance
+   */
+  private static loadTPASSData(): void {
+    try {
+      const tpassDataPath = path.join(process.cwd(), 'src', 'data', 'tpass-regions.json');
+      TrainService.tpassData = JSON.parse(fs.readFileSync(tpassDataPath, 'utf8'));
+      
+      // Build O(1) lookup map: station ID → regions
+      TrainService.stationToRegionsMap = new Map<string, string[]>();
+      
+      for (const [regionKey, region] of Object.entries(TrainService.tpassData!)) {
+        for (const stationId of region.stations) {
+          const existingRegions = TrainService.stationToRegionsMap.get(stationId) || [];
+          existingRegions.push(regionKey);
+          TrainService.stationToRegionsMap.set(stationId, existingRegions);
+        }
+      }
+      
+      console.error('TPASS data loaded successfully');
+    } catch (error) {
+      console.error('Failed to load TPASS data:', error);
+      TrainService.tpassData = {};
+      TrainService.stationToRegionsMap = new Map();
+    }
+  }
 
   /**
    * Get daily train timetable between two stations
@@ -187,9 +226,18 @@ export class TrainService {
       const destinationSequence = destinationStop.StopSequence;
       const stops = Math.abs(destinationSequence - originSequence) - 1; // Exclude origin and destination
       
-      // Check TPASS monthly pass eligibility
+      // Check TPASS monthly pass eligibility (both train type AND regional restrictions)
       const restrictedTrainTypes: string[] = Object.values(TPASS_RESTRICTED_TRAIN_TYPES);
-      const isMonthlyPassEligible = !restrictedTrainTypes.includes(train.TrainInfo.TrainTypeCode);
+      const isTrainTypeEligible = !restrictedTrainTypes.includes(train.TrainInfo.TrainTypeCode);
+      
+      // Check TPASS regional eligibility if station IDs are available
+      let isRegionEligible = true;
+      if (originStationId && destinationStationId) {
+        const tpassEligibility = this.getTPASSRegion(originStationId, destinationStationId);
+        isRegionEligible = tpassEligibility.isEligible;
+      }
+      
+      const isMonthlyPassEligible = isTrainTypeEligible && isRegionEligible;
       
       results.push({
         trainNo: train.TrainInfo.TrainNo,
@@ -264,13 +312,22 @@ export class TrainService {
     trains: TrainSearchResult[], 
     originName: string, 
     destName: string,
+    originStationId?: string,
+    destinationStationId?: string,
     includeDetails: boolean = true
   ): string {
     if (trains.length === 0) {
       return `😔 No trains found between ${originName} and ${destName}`;
     }
 
-    let result = `🚄 **${originName} → ${destName}** (${trains.length} 班次)\n\n`;
+    // Check TPASS eligibility if station IDs provided
+    let tpassInfo = '';
+    if (originStationId && destinationStationId) {
+      const tpassEligibility = this.getTPASSRegion(originStationId, destinationStationId);
+      tpassInfo = `\n🎫 ${tpassEligibility.message}\n`;
+    }
+
+    let result = `🚄 **${originName} → ${destName}** (${trains.length} 班次)${tpassInfo}\n`;
 
     trains.forEach((train, index) => {
       const monthlyPass = train.isMonthlyPassEligible ? '💳' : '💰';
@@ -291,5 +348,59 @@ export class TrainService {
     }
 
     return result.trim();
+  }
+
+  /**
+   * Get TPASS region for a station pair - optimized with O(1) lookups
+   */
+  getTPASSRegion(originStationId: string, destinationStationId: string): TPASSEligibility {
+    try {
+      // Ensure TPASS data is loaded
+      if (!TrainService.tpassData || !TrainService.stationToRegionsMap) {
+        TrainService.loadTPASSData();
+      }
+
+      // O(1) lookup for station regions
+      const originRegions = TrainService.stationToRegionsMap!.get(originStationId) || [];
+      const destRegions = TrainService.stationToRegionsMap!.get(destinationStationId) || [];
+
+      // Check for common regions (same-region travel)
+      for (const originRegion of originRegions) {
+        if (destRegions.includes(originRegion)) {
+          const region = TrainService.tpassData![originRegion];
+          return {
+            isEligible: true,
+            region: originRegion,
+            regionName: region.name,
+            price: region.price,
+            message: `TPASS適用: ${region.name} ✅`
+          };
+        }
+      }
+
+      // Cross-region travel (both stations in TPASS network but different regions)
+      if (originRegions.length > 0 && destRegions.length > 0) {
+        return {
+          isEligible: false,
+          message: 'TPASS: 需跨區購票 ❌'
+        };
+      }
+
+      // Stations not in TPASS coverage
+      return {
+        isEligible: false,
+        message: 'TPASS: 不適用此路線'
+      };
+
+    } catch (error) {
+      this.errorHandler.logError('Error checking TPASS eligibility', error, {
+        originStationId,
+        destinationStationId
+      });
+      return {
+        isEligible: false,
+        message: 'TPASS: 資料載入錯誤'
+      };
+    }
   }
 }

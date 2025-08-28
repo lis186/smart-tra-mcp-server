@@ -10,12 +10,13 @@ import DelegationTests from './integration/delegation.test.js';
 import UserJourneyTests from './e2e/user-journeys.test.js';
 import DestinationMappingTests from './unit/destination-mapping.test.js';
 import EdgeCaseTests from './unit/edge-cases.test.js';
+import TPASSRegionsTests from './unit/tpass-regions.test.js';
 import HTTPTransportTests from './http/http-test-suite.js';
 
 class TestSuiteRunner {
   constructor() {
     this.suites = [
-      { name: 'Unit Tests', tests: [DestinationMappingTests, EdgeCaseTests] },
+      { name: 'Unit Tests', tests: [DestinationMappingTests, EdgeCaseTests, TPASSRegionsTests] },
       { name: 'Integration Tests', tests: [ToolBoundaryTests, DelegationTests] },
       { name: 'E2E Tests', tests: [UserJourneyTests] },
       { name: 'HTTP Transport Tests', tests: [HTTPTransportTests] }
@@ -125,6 +126,7 @@ class TestSuiteRunner {
     // Key insights
     console.log('\n💡 Key Insights:');
     console.log('   • Destination mapping logic correctness');
+    console.log('   • TPASS regional monthly pass eligibility accuracy');
     console.log('   • Tool boundary enforcement effectiveness');
     console.log('   • Transfer detection accuracy');
     console.log('   • User journey completion rates');

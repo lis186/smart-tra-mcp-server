@@ -400,7 +400,13 @@ export class SmartTRAServer {
 
       // Process and format results using service layer
       const processedTrains = this.trainService.processTrainSearchResults(trains, originStation.StationID, destStation.StationID);
-      const responseText = this.trainService.formatTrainResults(processedTrains, originStation.StationName.Zh_tw, destStation.StationName.Zh_tw);
+      const responseText = this.trainService.formatTrainResults(
+        processedTrains, 
+        originStation.StationName.Zh_tw, 
+        destStation.StationName.Zh_tw,
+        originStation.StationID,
+        destStation.StationID
+      );
 
       return {
         content: [{
